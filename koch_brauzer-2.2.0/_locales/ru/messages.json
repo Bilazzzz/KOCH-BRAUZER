@@ -1,0 +1,16 @@
+{
+  "appName": { "message": "KOCH BRAUZER" },
+  "appDesc": { "message": "Современная страница новой вкладки." },
+  "search": { "message": "Поиск..." },
+  "clearHistory": { "message": "Очистить историю" },
+  "delete": { "message": "Удалить" },
+  "edit": { "message": "Редактировать" },
+  "add": { "message": "Добавить" },
+  "save": { "message": "Сохранить" },
+  "cancel": { "message": "Отмена" },
+  "settings": { "message": "Настройки" },
+  "shortcuts": { "message": "Ярлыки" },
+  "categories": { "message": "Категории" },
+  "themes": { "message": "Темы" },
+  "searchHistory": { "message": "История поиска" }
+}

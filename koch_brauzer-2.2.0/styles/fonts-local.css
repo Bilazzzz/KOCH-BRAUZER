@@ -1,0 +1,26 @@
+@font-face{
+  font-family:'Product Sans';
+  src:url('../fonts/ProductSans-Regular.woff2') format('woff2'),
+      url('../fonts/ProductSans-Regular.ttf')  format('truetype');
+  font-weight:400;
+  font-style:normal;
+  font-display:swap;
+}
+
+@font-face{
+  font-family:'Product Sans';
+  src:url('../fonts/ProductSans-Medium.woff2') format('woff2'),
+      url('../fonts/ProductSans-Medium.ttf')  format('truetype');
+  font-weight:500;
+  font-style:normal;
+  font-display:swap;
+}
+
+@font-face{
+  font-family:'Product Sans';
+  src:url('../fonts/ProductSans-Bold.woff2') format('woff2'),
+      url('../fonts/ProductSans-Bold.ttf')  format('truetype');
+  font-weight:700 800;   /* покрывает и 700, и 800 из стилей */
+  font-style:normal;
+  font-display:swap;
+}

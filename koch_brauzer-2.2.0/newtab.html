@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ru">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>KOCH BRAUZER</title>
+
+      <link rel="preconnect" href="https://fonts.cdnfonts.com">
+      <link rel="stylesheet" href="https://fonts.cdnfonts.com/css/product-sans">
+      <link rel="stylesheet" href="styles/fonts-local.css">
+      <link rel="stylesheet" href="styles/main.css">
+    </head>
+</head>
+<body data-theme="rose">
+
+  <video id="bg-video" muted loop autoplay playsinline hidden></video>
+  <div id="bg-image" hidden></div>
+  <div id="bg-orbs" aria-hidden="true">
+    <span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span>
+  </div>
+  <div id="bg-dim"></div>
+
+  <header class="topbar">
+    <span class="brand">KOCH BRAUZER</span>
+    <div class="topbar-right">
+      <button id="settings-btn" class="pill-btn" title="Настройки">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <div class="select-wrap">
+        <span class="select-ico">🌸</span>
+        <select id="theme-select" class="pill-select" title="Тема"></select>
+      </div>
+    </div>
+  </header>
+
+  <main class="panel">
+    <section class="clocks">
+      <div class="clock-card">
+        <div class="clock-city" id="city-a">—</div>
+        <div class="clock-time" id="time-a">--:--:--</div>
+        <div class="clock-wx" id="wx-a">—</div>
+      </div>
+      <div class="clock-card">
+        <div class="clock-city" id="city-b">—</div>
+        <div class="clock-time" id="time-b">--:--:--</div>
+        <div class="clock-wx" id="wx-b">—</div>
+      </div>
+    </section>
+
+    <section class="hero">
+      <div class="avatar" id="avatar">
+        <img id="avatar-img" alt="" hidden>
+        <span id="avatar-fallback">K</span>
+      </div>
+      <h1 class="title">KOCH&nbsp;BRAUZER</h1>
+      <p class="subtitle" id="subtitle">твоя стартовая страница</p>
+    </section>
+
+    <section class="search-row">
+      <div class="search-bar">
+        <button id="engine-btn" class="engine-btn" title="Сменить поисковик">G</button>
+        <input id="search-input" type="text" placeholder="Поиск…" autocomplete="off" spellcheck="false">
+        <button id="search-go" class="go-btn" title="Найти">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.6" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        </button>
+      </div>
+      <div id="suggest" class="suggest" hidden>
+        <ul id="suggest-list"></ul>
+        <div class="suggest-foot">
+          <button id="clear-history" class="link-btn">Очистить историю</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="cats" class="cats"></section>
+    <button id="add-cat" class="add-cat">＋ категория</button>
+  </main>
+
+  <div id="settings-overlay" class="overlay" hidden>
+    <div class="modal">
+      <header class="modal-head">
+        <h2>Настройки</h2>
+        <button class="close-btn" data-close="settings-overlay">✕</button>
+      </header>
+      <div class="modal-body">
+        <label class="fld"><span>Подзаголовок</span>
+          <input id="set-subtitle" type="text" maxlength="60">
+        </label>
+        <div class="row2">
+          <label class="fld"><span>Город 1</span><input id="set-city-a" type="text"></label>
+          <label class="fld"><span>Город 2</span><input id="set-city-b" type="text"></label>
+        </div>
+        <label class="fld"><span>Аватар (изображение)</span>
+          <div class="row2">
+            <input id="set-avatar" type="file" accept="image/*">
+            <button id="reset-avatar" class="btn ghost">Сбросить</button>
+          </div>
+        </label>
+        <label class="fld"><span>Фон</span>
+          <select id="set-bg-type">
+            <option value="none">Неон (по умолчанию)</option>
+            <option value="video">Видео (зацикленное)</option>
+            <option value="image">Изображение</option>
+          </select>
+        </label>
+        <label class="fld"><span>Файл фона (видео/картинка)</span>
+          <input id="set-bg-file" type="file" accept="video/*,image/*">
+        </label>
+        <label class="fld"><span>…или URL фона</span>
+          <input id="set-bg-url" type="text" placeholder="https://…/video.mp4">
+        </label>
+        <div class="modal-actions">
+          <button id="export-btn" class="btn ghost">Экспорт</button>
+          <label class="btn ghost file-label">Импорт<input id="import-btn" type="file" accept=".json" hidden></label>
+          <button id="reset-btn" class="btn danger">Сбросить всё</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sc-overlay" class="overlay" hidden>
+    <div class="modal small">
+      <header class="modal-head">
+        <h2 id="sc-title-head">Ярлык</h2>
+        <button class="close-btn" data-close="sc-overlay">✕</button>
+      </header>
+      <form id="sc-form" class="modal-body">
+        <label class="fld"><span>Название</span><input id="sc-name" required maxlength="24"></label>
+        <label class="fld"><span>URL</span><input id="sc-url" required placeholder="https://…"></label>
+        <label class="fld"><span>Иконка (эмодзи или URL, пусто = favicon)</span><input id="sc-icon" maxlength="60"></label>
+        <div class="modal-actions">
+          <button type="submit" class="btn primary">Сохранить</button>
+          <button type="button" id="sc-delete" class="btn danger" hidden>Удалить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script type="module" src="scripts/main.js"></script>
+</body>
+</html>

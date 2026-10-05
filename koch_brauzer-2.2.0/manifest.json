@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "KOCH BRAUZER",
+  "version": "2.2.0",
+  "default_locale": "ru",
+  "description": "Минималистичная и красивая страница новой вкладки.",
+  "chrome_url_overrides": { "newtab": "newtab.html" },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://api.open-meteo.com/*",
+    "https://geocoding-api.open-meteo.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "koch-brauzer@mozilla.webext",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

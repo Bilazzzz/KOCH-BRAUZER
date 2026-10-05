@@ -1,0 +1,15 @@
+{
+  "name": "koch-brauzer",
+  "version": "2.2.0",
+  "description": "Минималистичная неоновая страница новой вкладки для Chromium и Firefox. Manifest V3.",
+  "main": "background.js",
+  "scripts": {
+    "lint": "web-ext lint --source-dir .",
+    "build": "web-ext build --source-dir . --artifacts-dir dist --overwrite-dest"
+  },
+  "keywords": [],
+  "type": "module",
+  "dependencies": {
+    "web-ext": "^10.7.0"
+  }
+}

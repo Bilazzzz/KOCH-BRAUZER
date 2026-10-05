@@ -1,0 +1,16 @@
+{
+  "appName": { "message": "KOCH BRAUZER" },
+  "appDesc": { "message": "Modern new tab page." },
+  "search": { "message": "Search..." },
+  "clearHistory": { "message": "Clear history" },
+  "delete": { "message": "Delete" },
+  "edit": { "message": "Edit" },
+  "add": { "message": "Add" },
+  "save": { "message": "Save" },
+  "cancel": { "message": "Cancel" },
+  "settings": { "message": "Settings" },
+  "shortcuts": { "message": "Shortcuts" },
+  "categories": { "message": "Categories" },
+  "themes": { "message": "Themes" },
+  "searchHistory": { "message": "Search history" }
+}
