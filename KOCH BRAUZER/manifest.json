@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "KOCH BRAUZER",
-  "version": "2.3.7",
+  "version": "2.4.0",
   "description": "Минималистичная и красивая страница новой вкладки.",
   "chrome_url_overrides": { "newtab": "newtab.html" },
   "permissions": ["storage"],
