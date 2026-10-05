@@ -14,7 +14,6 @@
 
 ![main](Docs/screenshot.png)
 ![settings](Docs/settings.png)
--->
 
 ---
 
