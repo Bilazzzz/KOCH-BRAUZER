@@ -1,6 +1,6 @@
-/* ============ KOCH BRAUZER v2.3.3 — единый модуль ============ */
+/* ============ KOCH BRAUZER v2.6 — единый модуль ============ */
 
-/* ---------- 1. Browser API (Firefox first) ---------- */
+/* ---------- 1. Browser API ---------- */
 const api = typeof browser !== 'undefined' ? browser : chrome;
 const isExt = !!(api && api.runtime && api.runtime.id);
 
@@ -94,26 +94,66 @@ function normalizeUrl(str) {
             return '';
 }
 
-const readFileAsDataURL = f => new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result);
-    r.onerror = () => rej(new Error('read error'));
-    r.readAsDataURL(f);
-});
+/* ---------- 3. Цвет: HEX <-> HSL ---------- */
+function hexToRgb(hex) {
+    hex = String(hex).replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    const n = parseInt(hex, 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
 
-/* обёртка: ошибка настройки никогда не проходит молча */
-const safe = fn => (...a) => {
-    Promise.resolve(fn(...a)).catch(err => {
-        console.error('[KOCH] setting error:', err);
-        toast('Не удалось применить настройку', 'error');
-    });
+function rgbToHex(r, g, b) {
+    const to2 = x => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0');
+    return '#' + to2(r) + to2(g) + to2(b);
+}
+
+function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    let h = 0, s = 0, l = (mx + mn) / 2;
+    if (mx !== mn) {
+        const d = mx - mn;
+        s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+        if (mx === r) h = (g - b) / d + (g < b ? 6 : 0);
+        else if (mx === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h /= 6;
+    }
+    return { h: h * 360, s: s * 100, l: l * 100 };
+}
+
+function hslToRgb(h, s, l) {
+    h /= 360; s /= 100; l /= 100;
+    if (s === 0) { const v = l * 255; return { r: v, g: v, b: v }; }
+    const hue2rgb = (p, q, t) => {
+        if (t < 0) t += 1; if (t > 1) t -= 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t;
+        if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+        return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    return { r: hue2rgb(p, q, h + 1 / 3) * 255, g: hue2rgb(p, q, h) * 255, b: hue2rgb(p, q, h - 1 / 3) * 255 };
+}
+
+const hslHex = (h, s, l) => {
+    const { r, g, b } = hslToRgb(h, s, l);
+    return rgbToHex(r, g, b);
 };
 
-/* ---------- 3. Хранилище настроек ---------- */
+const rgbaOf = (hex, a) => {
+    const { r, g, b } = hexToRgb(hex);
+    return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${a})`;
+};
+
+/* ---------- 4. Хранилище ---------- */
 const clone = o => o === undefined ? undefined : JSON.parse(JSON.stringify(o));
 
 const DEFAULT_SETTINGS = {
     theme: 'rose',
+    customColor: '#ff4fa3',
+    title: 'KOCH BRAUZER',
     subtitle: 'твоя стартовая страница',
     cities: ['Воткинск', 'Уральск'],
     avatar: '',
@@ -169,6 +209,8 @@ function migrate(old) {
     const m = clone(DEFAULT_SETTINGS);
     if (old.theme) m.theme = old.theme;
     if (old.subtitle !== undefined) m.subtitle = old.subtitle;
+    if (old.title !== undefined) m.title = old.title;
+    if (old.customColor) m.customColor = old.customColor;
     if (old.cities) m.cities = old.cities;
     if (old.avatar !== undefined) m.avatar = old.avatar;
     if (old.engine) m.engine = old.engine;
@@ -216,13 +258,16 @@ const store = {
     async exportAll() { return JSON.stringify(await apiStorage.get(['settings', 'categories', 'history', 'schemaVersion']), null, 2); },
     async importAll(json) {
         const d = JSON.parse(json);
-        if (d.settings) d.settings = migrate(d.settings);
+        if (!d || typeof d !== 'object' || !d.settings || typeof d.settings !== 'object') {
+            throw new Error('bad backup');
+        }
+        d.settings = migrate(d.settings);
         await apiStorage.set(d);
         settingsCache = null;
     }
 };
 
-/* ---------- 4. Медиа-хранилище (IndexedDB, без base64 и лимитов) ---------- */
+/* ---------- 5. Медиа (IndexedDB) ---------- */
 const MEDIA_KEY = 'bg-media';
 let idbPromise = null;
 
@@ -268,13 +313,63 @@ async function mediaDel(key) {
     });
 }
 
-/* ---------- 5. Темы и внешний вид ---------- */
+/* ---------- 6. Темы ---------- */
 const THEMES = {
     rose: 'Розовая', purple: 'Фиолетовая', ocean: 'Океан', green: 'Изумруд',
-    dark: 'Тёмная', light: 'Светлая', midnight: 'Полночь', sunset: 'Закат'
+    dark: 'Тёмная', light: 'Светлая', midnight: 'Полночь', sunset: 'Закат',
+    custom: 'Своя'
 };
 
 let appliedTheme = null, applying = false, bgObjectUrl = null;
+
+/* Палитра из одного цвета: тон, насыщенность И светлота выбора учитываются */
+function applyCustomThemeVars(hex) {
+    const clean = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '#ff4fa3';
+    const { r, g, b } = hexToRgb(clean);
+    const { h, s, l } = rgbToHsl(r, g, b);
+    const cl = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
+
+    const S = cl(s, 30, 90);
+    const L = cl(l, 15, 85);
+    const d = L / 60;
+
+    const bg      = hslHex(h, S * 0.55, cl(4 * d, 2, 14));
+    const panel   = hslHex(h, S * 0.60, cl(8 * d, 4, 22));
+    const card    = hslHex(h, S * 0.60, cl(11 * d, 6, 28));
+    const card2   = hslHex(h, S * 0.60, cl(15 * d, 9, 34));
+    const accent  = clean;
+    const accent2 = hslHex(h, cl(S, 40, 90), cl(L + 16, 55, 88));
+    const yellow  = hslHex((h + 50) % 360, 75, 70);
+    const text    = hslHex(h, S * 0.30, 93);
+    const muted   = hslHex(h, S * 0.50, cl(L * 0.8 + 15, 45, 72));
+    const orb1    = hslHex(h, cl(S * 1.15, 40, 95), cl(L, 40, 65));
+    const orb2    = hslHex(h, S * 0.80, cl(L * 0.35, 8, 30));
+    const orb3    = accent2;
+
+    const st = document.documentElement.style;
+    st.setProperty('--bg', bg);
+    st.setProperty('--panel', rgbaOf(panel, 'var(--panel-opacity)'));
+    st.setProperty('--card', rgbaOf(card, 'var(--card-opacity)'));
+    st.setProperty('--card2', rgbaOf(card2, 'var(--card-opacity)'));
+    st.setProperty('--accent', accent);
+    st.setProperty('--accent2', accent2);
+    st.setProperty('--yellow', yellow);
+    st.setProperty('--text', text);
+    st.setProperty('--muted', muted);
+    st.setProperty('--border', rgbaOf(accent, 0.28));
+    st.setProperty('--border-hi', rgbaOf(accent, 0.55));
+    st.setProperty('--glow', rgbaOf(accent, 0.35));
+    st.setProperty('--orb1', orb1);
+    st.setProperty('--orb2', orb2);
+    st.setProperty('--orb3', orb3);
+}
+
+function clearCustomThemeVars() {
+    const st = document.documentElement.style;
+    ['--bg','--panel','--card','--card2','--accent','--accent2','--yellow',
+    '--text','--muted','--border','--border-hi','--glow','--orb1','--orb2','--orb3']
+    .forEach(k => st.removeProperty(k));
+}
 
 async function applyTheme(id, persist = true) {
     if (applying) return;
@@ -284,6 +379,12 @@ async function applyTheme(id, persist = true) {
         if (id === appliedTheme && !persist) { applying = false; return; }
         appliedTheme = id;
         document.body.dataset.theme = id;
+        if (id === 'custom') {
+            const s = await store.getSettings();
+            applyCustomThemeVars(s.customColor || '#ff4fa3');
+        } else {
+            clearCustomThemeVars();
+        }
         if (persist) await store.updateSettings(s => ({ ...s, theme: id }));
     } finally { applying = false; }
 }
@@ -334,7 +435,7 @@ async function applyBackground(preloaded) {
     if (bg.type === 'video' && url) {
         i.hidden = true; o.hidden = true; v.hidden = false;
         v.style.opacity = op; v.style.filter = filt;
-        if (v.src !== url && v.dataset.kbUrl !== url) {
+        if (v.dataset.kbUrl !== url) {
             v.dataset.kbUrl = url;
             v.src = url;
             v.play().catch(() => {});
@@ -349,7 +450,14 @@ async function applyBackground(preloaded) {
     }
 }
 
-/* ремонт старого состояния: гигантский data-URL фона -> IndexedDB */
+function paintTitle(s) {
+    const t = document.getElementById('main-title');
+    if (!t) return;
+    const raw = (s.title || 'KOCH BRAUZER').trim();
+    t.textContent = raw;
+    document.title = raw || 'KOCH BRAUZER';
+}
+
 async function repairBgMedia(s) {
     const bg = s.bg || {};
     if (bg.url && bg.url.startsWith('data:') && bg.url.length > 200000) {
@@ -369,7 +477,7 @@ async function repairBgMedia(s) {
     return bg;
 }
 
-/* ---------- 6. Часы и погода ---------- */
+/* ---------- 7. Часы и погода ---------- */
 const geoCache = new Map();
 let tickTimer = null, wxTimer = null, clockSlots = [];
 
@@ -453,7 +561,7 @@ async function initClocks(preloaded) {
     })();
 }
 
-/* ---------- 7. Поиск ---------- */
+/* ---------- 8. Поиск ---------- */
 const ENGINES = {
     google: { label: 'G', name: 'Google', url: 'https://www.google.com/search?q=' },
     ddg: { label: 'DD', name: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=' },
@@ -527,7 +635,7 @@ async function initSearch(preloaded) {
     document.addEventListener('click', e => { if (!e.target.closest('.search-row')) hideSuggest(); });
 }
 
-/* ---------- 8. Категории и ярлыки ---------- */
+/* ---------- 9. Категории и ярлыки ---------- */
 let categories = [];
 let scModal = { catId: null, scId: null };
 
@@ -669,13 +777,13 @@ function bindAddCat() {
     $('#add-cat')?.addEventListener('click', async () => {
         const name = prompt('Название новой категории:');
         if (!name?.trim()) return;
-        const icons = ['📁', '', '', '🎮', '💻', '📚', '', '🛒'];
+        const icons = ['📁', '', '', '🎮', '💻', '', '', '🛒'];
         categories.push({ id: uid(), icon: icons[Math.floor(Math.random() * icons.length)], name: name.trim().toUpperCase(), shortcuts: [] });
         await saveCats(); toast('Категория добавлена');
     });
 }
 
-/* ---------- 9. Настройки ---------- */
+/* ---------- 10. Настройки ---------- */
 let currentSettings = null;
 
 const on = (id, ev, fn) => { const e = document.getElementById(id); if (e) e.addEventListener(ev, fn); return e; };
@@ -719,14 +827,23 @@ async function updateAppearanceSetting(key, valueOrFn) {
     applyAppearance(currentSettings.appearance);
 }
 
+async function setCustomColor(hex) {
+    await ensureSettings();
+    currentSettings = await store.updateSettings(s => ({ ...s, customColor: hex, theme: 'custom' }));
+    document.body.dataset.theme = 'custom';
+    appliedTheme = 'custom';
+    applyCustomThemeVars(hex);
+    const sel = $('#theme-select'); if (sel) sel.value = 'custom';
+}
+
 function bindSlider(inputId, path, valueId, suffix, step = 1) {
-    on(inputId, 'input', debounce(safe(e => {
+    on(inputId, 'input', debounce(e => {
         const v = step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
         txt(valueId, v + suffix);
         const parts = path.split('.');
         if (parts.length === 1) updateAppearanceSetting(parts[0], v);
         else updateAppearanceSetting(parts[0], prev => ({ ...prev, [parts[1]]: v }));
-    }), 100));
+    }, 100));
 }
 
 function paintAvatar(url) {
@@ -737,7 +854,7 @@ function paintAvatar(url) {
 }
 
 function bindSettings() {
-    on('settings-btn', 'click', safe(openSettings));
+    on('settings-btn', 'click', openSettings);
     document.querySelectorAll('.overlay').forEach(ov => {
         ov.addEventListener('click', e => { if (e.target === ov) ov.hidden = true; });
     });
@@ -745,19 +862,24 @@ function bindSettings() {
         b.addEventListener('click', () => { const t = document.getElementById(b.getAttribute('data-close')); if (t) t.hidden = true; });
     });
 
-    on('set-subtitle', 'input', debounce(safe(async e => {
+    on('set-title', 'input', debounce(async e => {
+        await updateSetting('title', e.target.value);
+        paintTitle({ title: e.target.value });
+    }, 300));
+
+    on('set-subtitle', 'input', debounce(async e => {
         await updateSetting('subtitle', e.target.value);
         txt('subtitle', e.target.value);
-    }), 300));
+    }, 300));
 
-    const cityHandler = idx => debounce(safe(async e => {
+    const cityHandler = idx => debounce(async e => {
         await updateSetting('cities', prev => { const c = (prev || []).slice(); c[idx] = e.target.value; return c; });
         initClocks();
-    }), 500);
+    }, 500);
     on('set-city-a', 'input', cityHandler(0));
     on('set-city-b', 'input', cityHandler(1));
 
-    on('set-avatar', 'change', safe(async e => {
+    on('set-avatar', 'change', async e => {
         const f = e.target.files[0]; if (!f) return;
         try {
             const url = await downscaleImage(f, 256);
@@ -767,20 +889,20 @@ function bindSettings() {
             toast('Не удалось прочитать файл', 'error');
         }
         e.target.value = '';
-    }));
-    on('reset-avatar', 'click', safe(async () => {
+    });
+    on('reset-avatar', 'click', async () => {
         await updateSetting('avatar', ''); paintAvatar(''); toast('Аватар сброшен');
-    }));
+    });
 
-    on('set-bg-type', 'change', safe(async e => {
+    on('set-bg-type', 'change', async e => {
         await updateSetting('bg', prev => ({ ...prev, type: e.target.value }));
         await applyBackground();
-    }));
-    on('set-bg-file', 'change', safe(async e => {
+    });
+    on('set-bg-file', 'change', async e => {
         const f = e.target.files[0]; if (!f) return;
         try {
             const type = f.type.indexOf('video') === 0 ? 'video' : 'image';
-            await mediaPut(MEDIA_KEY, f);                       // blob в IndexedDB, без base64
+            await mediaPut(MEDIA_KEY, f);
             await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
             val('set-bg-type', type); val('set-bg-url', '');
             await applyBackground(); toast('Фон обновлён');
@@ -789,25 +911,25 @@ function bindSettings() {
             toast('Не удалось сохранить файл фона', 'error');
         }
         e.target.value = '';
-    }));
-    on('set-bg-url', 'change', safe(async e => {
+    });
+    on('set-bg-url', 'change', async e => {
         const u = e.target.value.trim();
         await updateSetting('bg', prev => ({ ...prev, url: u, idb: '' }));
         if (u) mediaDel(MEDIA_KEY).catch(err => console.warn('[KOCH] media del:', err));
         await applyBackground(); toast('Фон обновлён');
-    }));
-    on('set-bg-opacity', 'input', debounce(safe(async e => {
+    });
+    on('set-bg-opacity', 'input', debounce(async e => {
         const v = parseInt(e.target.value, 10);
         txt('set-bg-opacity-val', v + '%');
         await updateSetting('bg', prev => ({ ...prev, opacity: v }));
         await applyBackground();
-    }), 100));
-    on('set-bg-blur', 'input', debounce(safe(async e => {
+    }, 100));
+    on('set-bg-blur', 'input', debounce(async e => {
         const v = parseInt(e.target.value, 10);
         txt('set-bg-blur-val', v + 'px');
         await updateSetting('bg', prev => ({ ...prev, blur: v }));
         await applyBackground();
-    }), 100));
+    }, 100));
 
     bindSlider('set-panel-opacity', 'panelOpacity', 'set-panel-opacity-val', '%');
     bindSlider('set-card-opacity', 'cardOpacity', 'set-card-opacity-val', '%');
@@ -816,37 +938,59 @@ function bindSettings() {
     bindSlider('set-radius-button', 'radius.button', 'set-radius-button-val', 'px');
     bindSlider('set-radius-chip', 'radius.chip', 'set-radius-chip-val', 'px');
     bindSlider('set-radius-input', 'radius.input', 'set-radius-input-val', 'px');
-    on('set-font-family', 'change', safe(e => updateAppearanceSetting('font', prev => ({ ...prev, family: e.target.value }))));
+    on('set-font-family', 'change', e => updateAppearanceSetting('font', prev => ({ ...prev, family: e.target.value })));
     bindSlider('set-font-size', 'font.size', 'set-font-size-val', 'px');
     bindSlider('set-font-weight', 'font.weight', 'set-font-weight-val', '');
     bindSlider('set-line-height', 'font.lineHeight', 'set-line-height-val', '', 0.1);
-    on('set-animations', 'change', safe(e => updateAppearanceSetting('animations', e.target.checked)));
+    on('set-animations', 'change', e => updateAppearanceSetting('animations', e.target.checked));
     bindSlider('set-transition-speed', 'transitionSpeed', 'set-transition-speed-val', 's', 0.01);
 
-    on('export-btn', 'click', safe(async () => {
+    on('set-custom-color', 'input', debounce(e => {
+        const hex = e.target.value;
+        val('set-custom-hex', hex);
+        setCustomColor(hex);
+    }, 80));
+    on('set-custom-hex', 'change', e => {
+        let hex = e.target.value.trim();
+        if (!/^#?[0-9a-fA-F]{6}$/.test(hex)) { toast('HEX вида #rrggbb', 'error'); return; }
+        if (hex[0] !== '#') hex = '#' + hex;
+        hex = hex.toLowerCase();
+        val('set-custom-color', hex);
+        val('set-custom-hex', hex);
+        setCustomColor(hex);
+    });
+
+    on('export-btn', 'click', async () => {
         const blob = new Blob([await store.exportAll()], { type: 'application/json' });
         const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
         a.download = 'koch-brauzer-backup.json'; a.click(); URL.revokeObjectURL(a.href);
         toast('Экспортировано');
-    }));
-    on('import-btn', 'change', safe(async e => {
-        const f = e.target.files[0]; if (!f) return;
+    });
+    on('import-btn', 'change', async e => {
+        const f = e.target.files[0];
+        e.target.value = '';
+        if (!f) return;
         try {
             await store.importAll(await f.text());
+            currentSettings = null;
             toast('Импортировано, перезагрузка…');
             setTimeout(() => location.reload(), 800);
-        } catch { toast('Ошибка импорта', 'error'); }
-        e.target.value = '';
-    }));
-    on('reset-btn', 'click', safe(async () => {
+        } catch (err) {
+            console.error('[KOCH] import:', err);
+            toast('Файл не похож на бэкап KOCH BRAUZER', 'error');
+        }
+    });
+    on('reset-btn', 'click', async () => {
         if (confirm('Сбросить все настройки и данные?')) { await store.reset(); location.reload(); }
-    }));
+    });
 }
 
 function setSlider(inputId, value, valueId, suffix) { val(inputId, value); txt(valueId, value + suffix); }
 
 async function openSettings() {
     currentSettings = await store.getSettings();
+    val('theme-select', currentSettings.theme || 'rose');
+    val('set-title', currentSettings.title || 'KOCH BRAUZER');
     val('set-subtitle', currentSettings.subtitle || '');
     val('set-city-a', currentSettings.cities?.[0] || '');
     val('set-city-b', currentSettings.cities?.[1] || '');
@@ -879,11 +1023,15 @@ async function openSettings() {
     if (anim) anim.checked = app.animations !== false;
     setSlider('set-transition-speed', app.transitionSpeed ?? 0.28, 'set-transition-speed-val', 's');
 
+    const cc = (currentSettings.customColor || '#ff4fa3').toLowerCase();
+    val('set-custom-color', cc);
+    val('set-custom-hex', cc);
+
     const ov = document.getElementById('settings-overlay');
     if (ov) ov.hidden = false;
 }
 
-/* ---------- 10. Запуск ---------- */
+/* ---------- 11. Запуск ---------- */
 window.addEventListener('error', e => {
     console.error('[KOCH] Error:', e.error || e.message);
     toast('Ошибка — смотри консоль (F12)', 'error');
@@ -914,10 +1062,11 @@ async function boot() {
     const start = performance.now();
     try {
         const s = await store.getSettings();
-        s.bg = await repairBgMedia(s);          // чиним старый раздутый фон, если есть
+        s.bg = await repairBgMedia(s);
         await applyTheme(s.theme, false);
         applyAppearance(s.appearance);
         await applyBackground(s);
+        paintTitle(s);
         const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
         paintAvatar(s.avatar || '');
         initThemeSelector(s.theme);
@@ -932,8 +1081,10 @@ async function boot() {
             await applyTheme(next.theme, false);
             applyAppearance(next.appearance);
             await applyBackground(next);
+            paintTitle(next);
             if (sub) sub.textContent = next.subtitle || '';
             paintAvatar(next.avatar || '');
+            const sel = $('#theme-select'); if (sel) sel.value = next.theme || 'rose';
             const c = JSON.stringify(next.cities || []);
             if (c !== lastCities) { lastCities = c; initClocks(next); }
         }, 120);
