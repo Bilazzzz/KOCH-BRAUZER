@@ -15,13 +15,20 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="Docs/settings.png" width="100%"></td>
-    <td width="50%"><img src="Docs/settings-pt2.png" width="100%"></td>
+    <td colspan="2">
+      <img src="Docs/screenshot.png" width="100%">
+    </td>
   </tr>
   <tr>
-    <td colspan="2"><img src="Docs/screenshot.png" width="100%"></td>
+    <td width="50%">
+      <img src="Docs/settings.png" width="100%">
+    </td>
+    <td width="50%">
+      <img src="Docs/settings-pt2.png" width="100%">
+    </td>
   </tr>
 </table>
+
 ---
 
 ## ✨ Возможности
