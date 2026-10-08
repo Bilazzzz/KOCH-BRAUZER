@@ -6,6 +6,7 @@
 ![Firefox](https://img.shields.io/badge/Firefox-142%2B-ff8ac2)
 ![Chrome](https://img.shields.io/badge/Chrome-142%2B-4285F4)
 ![Build](https://img.shields.io/badge/Build-none%20required-34d399)
+![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 > Неон, стекло — плюс полная кастомизация: темы, прозрачность, скругления, шрифты, анимации и фоновое видео. Без сборки, без зависимостей, без телеметрии.
 
