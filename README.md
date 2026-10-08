@@ -13,9 +13,13 @@
 
 ## 📸 Скриншоты
 
-![main](Docs/screenshot.png)
-![settings](Docs/settings.png)
-![settings-part2](Docs/settings-pt2.png)
+<table>
+  <tr>
+    <td><img src="Docs/screenshot.png" alt="Screenshot"></td>
+    <td><img src="Docs/settings.png" alt="Screenshot"></td>
+    <td><img src="Docs/settings-pt2.png" alt="Screenshot"></td>
+  </tr>
+</table>
 
 ---
 
