@@ -16,6 +16,14 @@
 
 ### https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/
 
+---
+
+## VirusTotal
+
+### https://www.virustotal.com/gui/file/7b4ff34d860c79ada808f309395d926cd4b92ae5c0a254cb64c146f89289fac9?nocache=1
+
+---
+
 > Расширение заменяет стандартную страницу новой вкладки — просто открой новую вкладку.
 
 ---
