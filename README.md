@@ -14,7 +14,13 @@
 
 ## 🚀 Установка
 
+# FireFox
+
 ### https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/
+
+# Edge
+
+### https://microsoftedge.microsoft.com/addons/detail/koch-brauzer/kmkmnnjonlnhcpdcjfgfhhjepcbakefm
 
 ---
 
