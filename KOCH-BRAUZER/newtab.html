@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KOCH BRAUZER</title>
 <style>
-:root{--panel-opacity:.72;--card-opacity:1;--bg-opacity:1;--panel-blur:0px;--card-blur:0px;--radius-panel:26px;--radius-card:18px;--radius-button:10px;--radius-chip:12px;--radius-input:10px;--font-family:'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;--font-size:16px;--font-weight:400;--line-height:1.5;--transition-speed:.28s;--r-lg:var(--radius-panel);--r-md:var(--radius-card);--r-sm:var(--radius-button);--tr:var(--transition-speed) cubic-bezier(.22,.7,.3,1);--font:var(--font-family)}
+:root{--panel-opacity:.72;--card-opacity:1;--bg-opacity:1;--panel-blur:10px;--card-blur:5px;--radius-panel:26px;--radius-card:18px;--radius-button:10px;--radius-chip:12px;--radius-input:10px;--font-family:'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;--font-size:16px;--font-weight:400;--line-height:1.5;--transition-speed:.28s;--r-lg:var(--radius-panel);--r-md:var(--radius-card);--r-sm:var(--radius-button);--tr:var(--transition-speed) cubic-bezier(.22,.7,.3,1);--font:var(--font-family)}
 [data-theme="rose"]{--bg:#1c0714;--panel:rgba(38,10,28,var(--panel-opacity));--card:rgba(43,13,32,var(--card-opacity));--card2:rgba(58,17,41,var(--card-opacity));--accent:#ff4fa3;--accent2:#ff8ac2;--yellow:#ffcf5e;--text:#ffe3f1;--muted:#b06a92;--border:rgba(255,79,163,.28);--border-hi:rgba(255,79,163,.55);--glow:rgba(255,79,163,.35);--orb1:#ff2e97;--orb2:#7a1b4d;--orb3:#ff8ac2}
 [data-theme="purple"]{--bg:#120720;--panel:rgba(26,10,40,var(--panel-opacity));--card:rgba(32,10,51,var(--card-opacity));--card2:rgba(45,17,71,var(--card-opacity));--accent:#a855f7;--accent2:#d8b4fe;--yellow:#fde047;--text:#f3e8ff;--muted:#9d7bc4;--border:rgba(168,85,247,.3);--border-hi:rgba(168,85,247,.6);--glow:rgba(168,85,247,.35);--orb1:#8b5cf6;--orb2:#3b0764;--orb3:#d8b4fe}
 [data-theme="ocean"]{--bg:#04121c;--panel:rgba(6,26,40,var(--panel-opacity));--card:rgba(10,34,51,var(--card-opacity));--card2:rgba(14,47,71,var(--card-opacity));--accent:#38bdf8;--accent2:#7dd3fc;--yellow:#fde047;--text:#e0f2fe;--muted:#6aa3c4;--border:rgba(56,189,248,.28);--border-hi:rgba(56,189,248,.55);--glow:rgba(56,189,248,.3);--orb1:#0ea5e9;--orb2:#083344;--orb3:#7dd3fc}
@@ -85,12 +85,12 @@ html{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 .cat-card{background:color-mix(in srgb,var(--card) 90%,transparent);border:1px solid var(--border);border-radius:var(--r-md);padding:14px;backdrop-filter:blur(var(--card-blur));-webkit-backdrop-filter:blur(var(--card-blur));transition:all var(--tr);animation:fadeUp .6s var(--tr) both;contain:layout style paint;display:flex;flex-direction:column;align-items:stretch}
 .cat-card:hover{border-color:var(--border-hi);box-shadow:0 10px 34px var(--glow)}
 .cat-card.drag-over{border-color:var(--accent);border-style:dashed;background:var(--card2)}
-.cat-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);cursor:grab;flex-shrink:0}
+.cat-head{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);cursor:grab;flex-shrink:0}
 .cat-head:active{cursor:grabbing}
-.cat-ico{font-size:1rem;flex-shrink:0}
+.cat-ico{font-size:1rem;justify-self:start;min-width:0}
 .cat-ico-img{width:22px;height:22px;object-fit:cover;border-radius:6px;vertical-align:middle}
-.cat-name{flex:1;text-align:center;font-size:.78rem;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cat-add{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--muted);font-size:1rem;transition:.2s;flex-shrink:0}
+.cat-name{grid-column:2;text-align:center;font-size:.78rem;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.cat-add{grid-column:3;justify-self:end;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--muted);font-size:1rem;transition:.2s}
 .cat-add:hover{color:var(--accent);background:var(--card2);transform:scale(1.12)}
 .chips{display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:10px;flex:1;align-content:start}
 .chip{position:relative;width:100%;max-width:120px;justify-self:center;padding:12px 6px 10px;display:flex;flex-direction:column;align-items:center;gap:8px;background:color-mix(in srgb,var(--card2) 72%,transparent);border:1px solid transparent;border-radius:var(--radius-chip);backdrop-filter:blur(var(--card-blur));-webkit-backdrop-filter:blur(var(--card-blur));cursor:pointer;transition:all var(--tr);animation:fadeUp .5s var(--tr) both;box-sizing:border-box}
@@ -148,8 +148,6 @@ html{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 @media (min-width:2000px){.panel{width:min(1400px,92vw)}.clock-time{font-size:2.1rem}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 .reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
-
-/* ========== НОВОЕ: превью иконки и кнопки в модалке ярлыка ========== */
 .sc-icon-row{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0}
 .sc-icon-preview-row{display:flex;align-items:center;gap:10px;margin:4px 0}
 #sc-icon-preview{width:32px;height:32px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid var(--border)}
@@ -274,8 +272,8 @@ html{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
         <label class="fld">Карточки: <span id="set-card-opacity-val">100%</span><input id="set-card-opacity" type="range" min="0" max="100" value="100"></label>
 
         <div class="grp">Размытие</div>
-        <label class="fld">Размытие панелей: <span id="set-panel-blur-val">10px</span><input id="set-panel-blur" type="range" min="0" max="20" value="0"></label>
-        <label class="fld">Размытие карточек: <span id="set-card-blur-val">5px</span><input id="set-card-blur" type="range" min="0" max="20" value="0"></label>
+        <label class="fld">Размытие панелей: <span id="set-panel-blur-val">10px</span><input id="set-panel-blur" type="range" min="0" max="20" value="10"></label>
+        <label class="fld">Размытие карточек: <span id="set-card-blur-val">5px</span><input id="set-card-blur" type="range" min="0" max="20" value="5"></label>
 
         <div class="grp">Скругления</div>
         <label class="fld">Панель и модалки: <span id="set-radius-panel-val">26px</span><input id="set-radius-panel" type="range" min="0" max="50" value="26"></label>

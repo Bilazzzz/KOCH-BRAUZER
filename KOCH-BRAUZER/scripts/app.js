@@ -1,3 +1,4 @@
+/* ============ KOCH BRAUZER v3.5 — дефолт размытия 10/5 + схема v4 ============ */
 
 /* ---------- 1. Browser API ---------- */
 const api = typeof browser !== 'undefined' ? browser : chrome;
@@ -157,12 +158,11 @@ const DEFAULT_SETTINGS = {
     bg: { type: 'none', url: '', idb: '', opacity: 100, blur: 0 },
     appearance: {
         panelOpacity: 72, cardOpacity: 100,
-        panelBlur: 0, cardBlur: 0,
+        panelBlur: 10, cardBlur: 5,
         radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10 },
         font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1.5 },
         animations: true, transitionSpeed: 0.28
-    },
-    language: 'ru'
+    }
 };
 
 const DEFAULT_CATEGORIES = [
@@ -189,7 +189,7 @@ const DEFAULT_CATEGORIES = [
 ]}
 ];
 
-const CURRENT_SCHEMA = 3;
+const CURRENT_SCHEMA = 4;
 const PROFILE_FORMAT_VERSION = 3;
 const MEDIA_KEY = 'bg-media';
 let settingsCache = null;
@@ -223,8 +223,8 @@ function normalizeAppearance(app) {
     return {
         panelOpacity: num(app.panelOpacity, d.panelOpacity, 0, 100),
         cardOpacity: num(app.cardOpacity, d.cardOpacity, 0, 100),
-        panelBlur: num(app.panelBlur, 0, 0, 20),
-        cardBlur: num(app.cardBlur, 0, 0, 20),
+        panelBlur: num(app.panelBlur, d.panelBlur, 0, 20),
+        cardBlur: num(app.cardBlur, d.cardBlur, 0, 20),
         radius: {
             card: num(r.card, d.radius.card, 0, 50),
             panel: num(r.panel, d.radius.panel, 0, 50),
@@ -254,10 +254,20 @@ function normalizeSettings(s) {
         cities: Array.isArray(s.cities) ? s.cities.slice(0, 2).map(c => typeof c === 'string' ? c : '') : d.cities.slice(),
         avatar: typeof s.avatar === 'string' ? s.avatar : d.avatar,
         engine: typeof s.engine === 'string' && ENGINES[s.engine] ? s.engine : d.engine,
-        language: typeof s.language === 'string' ? s.language : d.language,
         bg: normalizeBg(s.bg),
         appearance: normalizeAppearance(s.appearance)
     };
+}
+
+/* Миграция схемы хранилища: v3 -> v4 (новые дефолты размытия 10/5) */
+function migrateSettings(s, ver) {
+    const m = normalizeSettings(s);
+    if (ver < 4) {
+        const oldApp = s && typeof s === 'object' && s.appearance ? s.appearance : {};
+        if ((oldApp.panelBlur ?? 0) === 0) m.appearance.panelBlur = DEFAULT_SETTINGS.appearance.panelBlur;
+        if ((oldApp.cardBlur ?? 0) === 0) m.appearance.cardBlur = DEFAULT_SETTINGS.appearance.cardBlur;
+    }
+    return m;
 }
 
 function normalizeCategories(cats) {
@@ -430,8 +440,9 @@ const store = {
         if (settingsCache) return clone(settingsCache);
         const data = await apiStorage.get(['settings', 'schemaVersion']);
         let s = data.settings;
-        if ((data.schemaVersion || 1) < CURRENT_SCHEMA || !s) {
-            s = normalizeSettings(s);
+        const ver = data.schemaVersion || 1;
+        if (ver < CURRENT_SCHEMA || !s) {
+            s = migrateSettings(s, ver);
             await this.setSettings(s, false);
             await apiStorage.set({ schemaVersion: CURRENT_SCHEMA });
         }
@@ -467,18 +478,16 @@ const store = {
         const data = await apiStorage.get(['settings', 'categories', 'history']);
 
         let cats = data.categories || clone(DEFAULT_CATEGORIES);
-        if (!includeCatImages) {
-            cats = cats.map(c => ({ ...c, image: '' }));
-        }
+        if (!includeCatImages) cats = cats.map(c => ({ ...c, image: '' }));
 
         const profile = {
             format: 'koch-brauzer-profile',
                 version: PROFILE_FORMAT_VERSION,
                 exportedAt: new Date().toISOString(),
                 profile: {
-                    settings: data.settings || clone(DEFAULT_SETTINGS),
-                    categories: cats,
-                    history: data.history || [],
+                    settings: normalizeSettings(data.settings),
+                    categories: normalizeCategories(cats),
+                    history: normalizeHistory(data.history),
                     media: includeMedia ? await exportMedia() : []
                 }
         };
@@ -488,6 +497,7 @@ const store = {
     async importAll(json) {
         let data;
         try { data = JSON.parse(json); } catch { throw new Error('Невалидный JSON'); }
+        if (!data || typeof data !== 'object') throw new Error('Файл не похож на бэкап');
 
         const migrated = migrateBackup(data);
 
@@ -589,25 +599,26 @@ async function applyTheme(id, persist = true) {
 
 function applyAppearance(app) {
     if (!app) return;
+    const d = DEFAULT_SETTINGS.appearance;
     const r = document.documentElement;
-    r.style.setProperty('--panel-opacity', (app.panelOpacity ?? 72) / 100);
-    r.style.setProperty('--card-opacity', (app.cardOpacity ?? 100) / 100);
-    r.style.setProperty('--panel-blur', (app.panelBlur ?? 0) + 'px');
-    r.style.setProperty('--card-blur', (app.cardBlur ?? 0) + 'px');
+    r.style.setProperty('--panel-opacity', (app.panelOpacity ?? d.panelOpacity) / 100);
+    r.style.setProperty('--card-opacity', (app.cardOpacity ?? d.cardOpacity) / 100);
+    r.style.setProperty('--panel-blur', (app.panelBlur ?? d.panelBlur) + 'px');
+    r.style.setProperty('--card-blur', (app.cardBlur ?? d.cardBlur) + 'px');
     if (app.radius) {
-        r.style.setProperty('--radius-card', (app.radius.card ?? 18) + 'px');
-        r.style.setProperty('--radius-panel', (app.radius.panel ?? 26) + 'px');
-        r.style.setProperty('--radius-button', (app.radius.button ?? 10) + 'px');
-        r.style.setProperty('--radius-chip', (app.radius.chip ?? 12) + 'px');
-        r.style.setProperty('--radius-input', (app.radius.input ?? 10) + 'px');
+        r.style.setProperty('--radius-card', (app.radius.card ?? d.radius.card) + 'px');
+        r.style.setProperty('--radius-panel', (app.radius.panel ?? d.radius.panel) + 'px');
+        r.style.setProperty('--radius-button', (app.radius.button ?? d.radius.button) + 'px');
+        r.style.setProperty('--radius-chip', (app.radius.chip ?? d.radius.chip) + 'px');
+        r.style.setProperty('--radius-input', (app.radius.input ?? d.radius.input) + 'px');
     }
     if (app.font) {
-        r.style.setProperty('--font-family', app.font.family || DEFAULT_SETTINGS.appearance.font.family);
-        r.style.setProperty('--font-size', (app.font.size ?? 16) + 'px');
-        r.style.setProperty('--font-weight', app.font.weight ?? 400);
-        r.style.setProperty('--line-height', app.font.lineHeight ?? 1.5);
+        r.style.setProperty('--font-family', app.font.family || d.font.family);
+        r.style.setProperty('--font-size', (app.font.size ?? d.font.size) + 'px');
+        r.style.setProperty('--font-weight', app.font.weight ?? d.font.weight);
+        r.style.setProperty('--line-height', app.font.lineHeight ?? d.font.lineHeight);
     }
-    r.style.setProperty('--transition-speed', (app.transitionSpeed ?? 0.28) + 's');
+    r.style.setProperty('--transition-speed', (app.transitionSpeed ?? d.transitionSpeed) + 's');
     r.classList.toggle('reduce-motion', app.animations === false);
 }
 
@@ -672,27 +683,21 @@ function setupVideoVisibility() {
         } catch {}
     };
 
-    // 1. Переключение вкладок (основной обработчик)
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) pauseVideo();
         else resumeVideo();
     });
 
-        // 2. Сворачивание окна / потеря фокуса браузером
-        //    (в некоторых браузерах при минимизации окна
-        //     документ не сразу становится скрытым)
         window.addEventListener('blur', () => {
             setTimeout(() => {
                 if (document.hidden) pauseVideo();
             }, 120);
         });
 
-        // 3. Возврат фокуса окну (после разворачивания)
         window.addEventListener('focus', () => {
             if (!document.hidden) resumeVideo();
         });
 
-            // 4. bfcache (навигация назад/вперёд)
             window.addEventListener('pagehide', pauseVideo);
             window.addEventListener('pageshow', () => {
                 if (!document.hidden) resumeVideo();
@@ -952,14 +957,14 @@ function buildCard(cat, ci) {
                 toast('У категории нет эмодзи', 'error');
             }
         } else if (action === '6') {
-            const emojis = ['🌐','🎵','🎮','💻','🛒','📁','🎨','📚','🏠','⚡','🔥','💎','🚀','🎯','☕','🍕','🌙','⭐','🎬','📱'];
+            const emojis = ['🌐','','🎮','💻','🛒','','','','🏠','','','💎','🚀','🎯','☕','','🌙','⭐','🎬',''];
             cat.icon = emojis[Math.floor(Math.random() * emojis.length)];
             saveCats();
             toast('Случайный эмодзи: ' + cat.icon);
         } else if (action === '7') {
             const customEmoji = prompt(
                 'Введите свой эмодзи:\n\n' +
-                'Примеры: 🚀 💡 🎧 🐱 🌸 🔒 ✨\n' +
+                'Примеры: 🚀 💡 🎧 🐱  🔒 ✨\n' +
                 '(можно скопировать с emojipedia.org или из любой переписки)\n\n' +
                 'Пустое поле — убрать эмодзи',
                 cat.icon || ''
@@ -1174,7 +1179,7 @@ function bindAddCat() {
     $('#add-cat')?.addEventListener('click', async () => {
         const name = prompt('Название новой категории:');
         if (!name?.trim()) return;
-        const emojis = ['🌐','🎵','🎮','💻','🛒','📁','🎨','📚','🏠','⚡'];
+        const emojis = ['🌐','','','💻','','','🎨','','',''];
         categories.push({
             id: uid(),
                         icon: emojis[Math.floor(Math.random() * emojis.length)],
@@ -1267,6 +1272,68 @@ function invalidateRuntimeState() {
         try { URL.revokeObjectURL(bgObjectUrl); } catch {}
         bgObjectUrl = null;
     }
+}
+
+/* ---------- 11.1. Синхронизация UI настроек ---------- */
+function syncSettingsUI(s) {
+    const d = DEFAULT_SETTINGS.appearance;
+    val('theme-select', s.theme || 'rose');
+    val('set-title', s.title || '');
+    val('set-subtitle', s.subtitle || '');
+    val('set-city-a', s.cities?.[0] || '');
+    val('set-city-b', s.cities?.[1] || '');
+
+    const bg = s.bg || {};
+    val('set-bg-type', bg.type || 'none');
+    val('set-bg-url', bg.url || '');
+    val('set-bg-opacity', bg.opacity ?? 100); txt('set-bg-opacity-val', (bg.opacity ?? 100) + '%');
+    val('set-bg-blur', bg.blur || 0); txt('set-bg-blur-val', (bg.blur || 0) + 'px');
+
+    const app = s.appearance || {};
+    val('set-panel-opacity', app.panelOpacity ?? d.panelOpacity); txt('set-panel-opacity-val', (app.panelOpacity ?? d.panelOpacity) + '%');
+    val('set-card-opacity', app.cardOpacity ?? d.cardOpacity); txt('set-card-opacity-val', (app.cardOpacity ?? d.cardOpacity) + '%');
+    setSlider('set-panel-blur', app.panelBlur ?? d.panelBlur, 'set-panel-blur-val', 'px');
+    setSlider('set-card-blur', app.cardBlur ?? d.cardBlur, 'set-card-blur-val', 'px');
+
+    const r = app.radius || {};
+    setSlider('set-radius-panel', r.panel ?? d.radius.panel, 'set-radius-panel-val', 'px');
+    setSlider('set-radius-card', r.card ?? d.radius.card, 'set-radius-card-val', 'px');
+    setSlider('set-radius-button', r.button ?? d.radius.button, 'set-radius-button-val', 'px');
+    setSlider('set-radius-chip', r.chip ?? d.radius.chip, 'set-radius-chip-val', 'px');
+    setSlider('set-radius-input', r.input ?? d.radius.input, 'set-radius-input-val', 'px');
+
+    const f = app.font || {};
+    const fam = $('#set-font-family');
+    if (fam) fam.value = f.family || d.font.family;
+    setSlider('set-font-size', f.size ?? d.font.size, 'set-font-size-val', 'px');
+    setSlider('set-font-weight', f.weight ?? d.font.weight, 'set-font-weight-val', '');
+    setSlider('set-line-height', f.lineHeight ?? d.font.lineHeight, 'set-line-height-val', '');
+
+    const anim = document.getElementById('set-animations');
+    if (anim) anim.checked = app.animations !== false;
+    setSlider('set-transition-speed', app.transitionSpeed ?? d.transitionSpeed, 'set-transition-speed-val', 's');
+
+    const cc = (s.customColor || '#ff4fa3').toLowerCase();
+    val('set-custom-color', cc);
+    val('set-custom-hex', cc);
+}
+
+/* ---------- 11.2. Применить ВСЁ из store к DOM ---------- */
+async function applyEverything() {
+    const s = await store.getSettings();
+    await applyTheme(s.theme, false);
+    applyAppearance(s.appearance);
+    await applyBackground(s);
+    paintTitle(s);
+    const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
+    paintAvatar(s.avatar || '');
+    initThemeSelector(s.theme);
+    qHistory = await store.getHistory();
+    paintEngine();
+    initClocks(s);
+    await renderCats();
+    currentSettings = s;
+    syncSettingsUI(s);
 }
 
 function bindSettings() {
@@ -1378,14 +1445,10 @@ function bindSettings() {
         setCustomColor(hex);
     });
 
-    /* ====== EXPORT: 3 варианта ====== */
+    /* ====== ЭКСПОРТ: 3 варианта ====== */
     on('export-btn', 'click', async () => {
         try {
             const data = await apiStorage.get(['settings', 'categories', 'history']);
-            const profileKB = Math.round(JSON.stringify({
-                s: data.settings, c: data.categories, h: data.history
-            }).length / 1024);
-
             const media = await exportMedia();
             const mediaMB = media.reduce((s, m) => s + (m.data?.length || 0), 0) * 0.75 / 1048576;
             const hasMedia = media.length > 0 && mediaMB > 0.1;
@@ -1396,7 +1459,10 @@ function bindSettings() {
             let includeMedia = false;
             let includeCatImages = true;
 
-            if (hasMedia || catImagesKB > 500) {
+            if (hasMedia || catImagesKB > 0) {
+                const profileKB = Math.round(JSON.stringify({
+                    s: data.settings, c: data.categories, h: data.history
+                }).length / 1024);
                 const mediaHint = hasMedia ? mediaMB.toFixed(1) + ' МБ' : '0 МБ';
                 const catHint = catImagesKB >= 1024 ? (catImagesKB / 1024).toFixed(1) + ' МБ' : catImagesKB + ' КБ';
 
@@ -1443,7 +1509,7 @@ function bindSettings() {
         }
     });
 
-    /* ====== IMPORT ====== */
+    /* ====== ИМПОРТ: валидация + применение без перезагрузки ====== */
     on('import-btn', 'change', async e => {
         const f = e.target.files[0];
         e.target.value = '';
@@ -1452,8 +1518,8 @@ function bindSettings() {
             const text = await f.text();
             await store.importAll(text);
             invalidateRuntimeState();
-            toast('Импортировано, перезагрузка…');
-            setTimeout(() => location.reload(), 800);
+            await applyEverything();
+            toast('Настройки импортированы');
         } catch (err) {
             console.error('[KOCH] import:', err);
             toast('Ошибка импорта: ' + err.message, 'error');
@@ -1461,7 +1527,10 @@ function bindSettings() {
     });
 
     on('reset-btn', 'click', async () => {
-        if (confirm('Сбросить все настройки и данные?')) { await store.reset(); location.reload(); }
+        if (confirm('Сбросить все настройки и данные?')) {
+            await store.reset();
+            location.reload();
+        }
     });
 }
 
@@ -1469,46 +1538,7 @@ function setSlider(inputId, value, valueId, suffix) { val(inputId, value); txt(v
 
 async function openSettings() {
     currentSettings = await store.getSettings();
-    val('theme-select', currentSettings.theme || 'rose');
-    val('set-title', currentSettings.title || 'KOCH BRAUZER');
-    val('set-subtitle', currentSettings.subtitle || '');
-    val('set-city-a', currentSettings.cities?.[0] || '');
-    val('set-city-b', currentSettings.cities?.[1] || '');
-
-    const bg = currentSettings.bg || {};
-    val('set-bg-type', bg.type || 'none');
-    val('set-bg-url', bg.url || '');
-    val('set-bg-opacity', bg.opacity ?? 100); txt('set-bg-opacity-val', (bg.opacity ?? 100) + '%');
-    val('set-bg-blur', bg.blur || 0); txt('set-bg-blur-val', (bg.blur || 0) + 'px');
-
-    const app = currentSettings.appearance || {};
-    val('set-panel-opacity', app.panelOpacity ?? 72); txt('set-panel-opacity-val', (app.panelOpacity ?? 72) + '%');
-    val('set-card-opacity', app.cardOpacity ?? 100); txt('set-card-opacity-val', (app.cardOpacity ?? 100) + '%');
-    setSlider('set-panel-blur', app.panelBlur ?? 0, 'set-panel-blur-val', 'px');
-    setSlider('set-card-blur', app.cardBlur ?? 0, 'set-card-blur-val', 'px');
-
-    const r = app.radius || {};
-    setSlider('set-radius-panel', r.panel ?? 26, 'set-radius-panel-val', 'px');
-    setSlider('set-radius-card', r.card ?? 18, 'set-radius-card-val', 'px');
-    setSlider('set-radius-button', r.button ?? 10, 'set-radius-button-val', 'px');
-    setSlider('set-radius-chip', r.chip ?? 12, 'set-radius-chip-val', 'px');
-    setSlider('set-radius-input', r.input ?? 10, 'set-radius-input-val', 'px');
-
-    const f = app.font || {};
-    const fam = $('#set-font-family');
-    if (fam) fam.value = f.family || DEFAULT_SETTINGS.appearance.font.family;
-    setSlider('set-font-size', f.size ?? 16, 'set-font-size-val', 'px');
-    setSlider('set-font-weight', f.weight ?? 400, 'set-font-weight-val', '');
-    setSlider('set-line-height', f.lineHeight ?? 1.5, 'set-line-height-val', '');
-
-    const anim = document.getElementById('set-animations');
-    if (anim) anim.checked = app.animations !== false;
-    setSlider('set-transition-speed', app.transitionSpeed ?? 0.28, 'set-transition-speed-val', 's');
-
-    const cc = (currentSettings.customColor || '#ff4fa3').toLowerCase();
-    val('set-custom-color', cc);
-    val('set-custom-hex', cc);
-
+    syncSettingsUI(currentSettings);
     const ov = document.getElementById('settings-overlay');
     if (ov) ov.hidden = false;
 }
@@ -1553,7 +1583,6 @@ async function boot() {
         paintAvatar(s.avatar || '');
         initThemeSelector(s.theme);
 
-        // Пауза видео: вкладки + сворачивание окна
         setupVideoVisibility();
 
         initClocks(s);
