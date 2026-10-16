@@ -147,7 +147,8 @@ html{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 @media (max-width:760px){.panel{margin-top:78px;padding:18px 14px 22px}.clocks{grid-template-columns:1fr}.clock-time{font-size:1.35rem}.avatar{width:78px;height:78px}.cats{grid-template-columns:1fr}}
 @media (min-width:2000px){.panel{width:min(1400px,92vw)}.clock-time{font-size:2.1rem}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
-.reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+.reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{animation:none!important;transition-duration:.01ms!important}
+.kb-paused *,.kb-paused *::before,.kb-paused *::after{animation-play-state:paused!important}
 .sc-icon-row{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0}
 .sc-icon-preview-row{display:flex;align-items:center;gap:10px;margin:4px 0}
 #sc-icon-preview{width:32px;height:32px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid var(--border)}
@@ -157,7 +158,7 @@ html{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 </style>
 </head>
 <body data-theme="rose">
-  <video id="bg-video" muted loop autoplay playsinline hidden></video>
+  <video id="bg-video" muted loop playsinline preload="auto" disablepictureinpicture hidden></video>
   <div id="bg-image" hidden></div>
   <div id="bg-orbs" aria-hidden="true">
     <span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span>

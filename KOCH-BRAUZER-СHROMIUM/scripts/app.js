@@ -622,7 +622,53 @@ function applyAppearance(app) {
     r.classList.toggle('reduce-motion', app.animations === false);
 }
 
-async function applyBackground(preloaded) {
+/* Применение фона. Вызовы выстраиваются в очередь: событие storage и ручной
+   вызов приходят почти одновременно, и раньше они гонялись друг с другом
+   (лишние blob-URL, перезагрузка видео, отозванный URL у только что
+   назначенного src). */
+let bgChain = Promise.resolve();
+let bgMediaSig = '';
+let bgVideoActive = false;
+let bgVideoUrl = '';
+let pageGone = false;
+
+/* Страница «живая», только если вкладка видима и окно не свёрнуто. */
+const isPageActive = () => !document.hidden && !pageGone;
+
+function applyBackground(preloaded) {
+    const run = bgChain.then(() => applyBackgroundNow(preloaded));
+    bgChain = run.catch(() => {});
+    return run;
+}
+
+/* Полностью освобождает видео (декодер и буферы), а не просто ставит на паузу. */
+function releaseVideo(v) {
+    try { v.pause(); } catch {}
+    if (v.hasAttribute('src')) {
+        v.removeAttribute('src');
+        try { v.load(); } catch {}
+    }
+    v.dataset.kbUrl = '';
+}
+
+/* Единственное место, где решается, играет видео или нет.
+   Видео играет только когда фон — видео И страница видима.
+   Файл подгружается лениво — только когда страница реально видна. */
+function syncVideoPlayback() {
+    const v = document.getElementById('bg-video');
+    if (!v) return;
+    if (bgVideoActive && bgVideoUrl && isPageActive()) {
+        if (v.dataset.kbUrl !== bgVideoUrl) {
+            v.dataset.kbUrl = bgVideoUrl;
+            v.src = bgVideoUrl;
+        }
+        if (v.paused) v.play().catch(() => {});
+    } else if (!v.paused) {
+        v.pause();
+    }
+}
+
+async function applyBackgroundNow(preloaded) {
     const s = preloaded || await store.getSettings();
     const bg = s.bg || { type: 'none', url: '', idb: '' };
     const v = document.getElementById('bg-video');
@@ -631,10 +677,17 @@ async function applyBackground(preloaded) {
     if (!v || !i || !o) return;
 
     let url = (bg.type !== 'none') ? (bg.url || '') : '';
+    let sig = url ? 'url:' + url : '';
     if (bg.type !== 'none' && bg.idb) {
         const blob = await mediaGet(bg.idb).catch(() => null);
-        if (blob) url = URL.createObjectURL(blob);
+        if (blob) {
+            // Файл тот же — переиспользуем уже созданный blob-URL, чтобы любое
+            // изменение настроек не перезагружало видео заново.
+            sig = `idb:${bg.idb}|${blob.size}|${blob.type}|${blob.lastModified || 0}|${blob.name || ''}`;
+            url = (sig === bgMediaSig && bgObjectUrl) ? bgObjectUrl : URL.createObjectURL(blob);
+        }
     }
+    bgMediaSig = sig;
     if (bgObjectUrl && bgObjectUrl !== url) URL.revokeObjectURL(bgObjectUrl);
     bgObjectUrl = (url && url.startsWith('blob:')) ? url : null;
 
@@ -646,62 +699,50 @@ async function applyBackground(preloaded) {
     if (bg.type === 'video' && url) {
         i.hidden = true; o.hidden = true; v.hidden = false;
         v.style.opacity = op; v.style.filter = filt;
-        if (v.dataset.kbUrl !== url) {
-            v.dataset.kbUrl = url;
-            v.src = url;
-            if (!document.hidden) v.play().catch(() => {});
-        }
+        bgVideoActive = true;
+        bgVideoUrl = url;
     } else if (bg.type === 'image' && url) {
-        v.hidden = true; v.pause(); o.hidden = true; i.hidden = false;
+        bgVideoActive = false; bgVideoUrl = '';
+        releaseVideo(v);
+        v.hidden = true; o.hidden = true; i.hidden = false;
         i.style.backgroundImage = `url("${url}")`; i.style.opacity = op; i.style.filter = filt;
     } else {
-        v.hidden = true; v.pause(); v.removeAttribute('src'); v.dataset.kbUrl = '';
+        bgVideoActive = false; bgVideoUrl = '';
+        releaseVideo(v);
+        v.hidden = true;
         i.hidden = true; i.style.backgroundImage = '';
         o.hidden = false;
     }
+    syncVideoPlayback();
 }
 
-/* ---------- 7.1. Пауза видео: вкладки + сворачивание окна ---------- */
+/* ---------- 7.1. Пауза видео и таймеров: вкладки + сворачивание окна ---------- */
+let videoVisibilityBound = false;
+
 function setupVideoVisibility() {
-    const pauseVideo = () => {
-        const v = document.getElementById('bg-video');
-        if (v && !v.paused && v.src) {
-            v.pause();
-            v.dataset.kbWasPlaying = '1';
-        }
+    if (videoVisibilityBound) return;
+    videoVisibilityBound = true;
+
+    const sync = () => {
+        document.documentElement.classList.toggle('kb-paused', !isPageActive());
+        syncVideoPlayback();
+        syncClockTimers();
     };
 
-    const resumeVideo = async () => {
-        const v = document.getElementById('bg-video');
-        if (!v || !v.src || !v.dataset.kbUrl) return;
-        try {
-            const s = await store.getSettings();
-            if (s.bg?.type === 'video') {
-                v.play().catch(() => {});
-                v.dataset.kbWasPlaying = '';
-            }
-        } catch {}
-    };
+    // Переключение вкладки, сворачивание окна, полное перекрытие окна
+    document.addEventListener('visibilitychange', sync);
 
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) pauseVideo();
-        else resumeVideo();
-    });
+    // Страховка для браузеров/ОС, где visibilitychange при сворачивании приходит с задержкой
+    window.addEventListener('blur', () => setTimeout(sync, 150));
+    window.addEventListener('focus', sync);
 
-        window.addEventListener('blur', () => {
-            setTimeout(() => {
-                if (document.hidden) pauseVideo();
-            }, 120);
-        });
+    // bfcache / заморозка страницы
+    window.addEventListener('pagehide', () => { pageGone = true; sync(); });
+    window.addEventListener('pageshow', () => { pageGone = false; sync(); });
+    document.addEventListener('freeze', () => { pageGone = true; sync(); });
+    document.addEventListener('resume', () => { pageGone = false; sync(); });
 
-        window.addEventListener('focus', () => {
-            if (!document.hidden) resumeVideo();
-        });
-
-            window.addEventListener('pagehide', pauseVideo);
-            window.addEventListener('pageshow', () => {
-                if (!document.hidden) resumeVideo();
-            });
+    sync();
 }
 
 function paintTitle(s) {
@@ -734,6 +775,8 @@ async function repairBgMedia(s) {
 /* ---------- 8. Часы и погода ---------- */
 const geoCache = new Map();
 let tickTimer = null, wxTimer = null, clockSlots = [];
+let clockGen = 0, clocksReady = false, lastWxAt = 0;
+const WX_INTERVAL = 30 * 60 * 1000;
 
 async function geocode(city) {
     if (!city || city === '—') return null;
@@ -767,51 +810,96 @@ function wxEmoji(code) {
     return '⛈️';
 }
 
+/* Форматтер и DOM-элемент кэшируются в слоте: раньше каждую секунду
+   создавался новый Intl.DateTimeFormat и выполнялся querySelector. */
 function tick() {
     const now = new Date();
-    clockSlots.forEach((s, i) => {
-        const elT = $(i === 0 ? '#time-a' : '#time-b'); if (!elT) return;
-        try {
-            elT.textContent = new Intl.DateTimeFormat('ru-RU', {
-                hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: s.tz || undefined
-            }).format(now);
-        } catch { elT.textContent = now.toLocaleTimeString('ru-RU'); }
-    });
-}
-
-async function refreshWeather() {
     for (let i = 0; i < clockSlots.length; i++) {
-        const s = clockSlots[i], wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
-        if (!wxEl) continue;
-        if (!s?.geo) { wxEl.textContent = '—'; continue; }
+        const s = clockSlots[i];
+        const elT = s.el || (s.el = $(i === 0 ? '#time-a' : '#time-b'));
+        if (!elT) continue;
+        let text;
         try {
-            const w = await weather(s.geo.lat, s.geo.lon);
-            wxEl.textContent = `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
-        } catch { wxEl.textContent = '—'; }
+            if (!s.fmt) {
+                s.fmt = new Intl.DateTimeFormat('ru-RU', {
+                    hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: s.tz || undefined
+                });
+            }
+            text = s.fmt.format(now);
+        } catch { s.fmt = null; text = now.toLocaleTimeString('ru-RU'); }
+        if (elT.textContent !== text) elT.textContent = text;
     }
 }
 
-async function initClocks(preloaded) {
+async function refreshWeather() {
+    const slots = clockSlots;
+    const pending = new Map();
+    for (let i = 0; i < slots.length; i++) {
+        const s = slots[i], wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
+        if (!wxEl) continue;
+        if (!s?.geo) { wxEl.textContent = '—'; continue; }
+        try {
+            // один и тот же город в обоих слотах — один запрос вместо двух
+            const key = s.geo.lat + ',' + s.geo.lon;
+            if (!pending.has(key)) pending.set(key, weather(s.geo.lat, s.geo.lon));
+            const w = await pending.get(key);
+            wxEl.textContent = `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
+        } catch { wxEl.textContent = '—'; }
+    }
+    lastWxAt = Date.now();
+}
+
+function stopClockTimers() {
     if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
     if (wxTimer) { clearInterval(wxTimer); wxTimer = null; }
+}
+
+function startClockTimers() {
+    stopClockTimers();
+    if (!isPageActive() || !clockSlots.length) return;
+    tick();
+    tickTimer = setInterval(tick, 1000);
+    if (clocksReady) {
+        wxTimer = setInterval(refreshWeather, WX_INTERVAL);
+        if (Date.now() - lastWxAt >= WX_INTERVAL) refreshWeather();
+    }
+}
+
+/* Пока вкладка скрыта или окно свёрнуто — таймеры часов и погоды не тикают. */
+function syncClockTimers() {
+    if (!isPageActive()) { if (tickTimer || wxTimer) stopClockTimers(); }
+    else if (!tickTimer) startClockTimers();
+}
+
+async function initClocks(preloaded) {
+    stopClockTimers();
+    const gen = ++clockGen;
+    clocksReady = false;
     const s = preloaded || await store.getSettings();
+    if (gen !== clockGen) return;
     const cities = s.cities || ['—', '—'];
     clockSlots = [0, 1].map(i => {
         const city = cities[i] || '—';
         const nameEl = $(i === 0 ? '#city-a' : '#city-b');
         if (nameEl) nameEl.textContent = String(city).toUpperCase();
-        return { city, tz: null, geo: null };
+        return { city, tz: null, geo: null, fmt: null, el: null };
     });
     tick();
-    tickTimer = setInterval(tick, 1000);
+    if (isPageActive()) tickTimer = setInterval(tick, 1000);
     (async () => {
         await Promise.all(clockSlots.map(async sl => {
             sl.geo = await geocode(sl.city);
             sl.tz = sl.geo?.tz || null;
+            sl.fmt = null;
         }));
+        if (gen !== clockGen) return;
+        clocksReady = true;
+        lastWxAt = 0;
         tick();
-        refreshWeather();
-        wxTimer = setInterval(refreshWeather, 30 * 60 * 1000);
+        if (isPageActive()) {
+            refreshWeather();
+            wxTimer = setInterval(refreshWeather, WX_INTERVAL);
+        }
     })();
 }
 
