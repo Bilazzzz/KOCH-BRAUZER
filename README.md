@@ -18,7 +18,7 @@
 
 [**🦊 Firefox**](https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/) &nbsp;•&nbsp;
 [**🌐 Edge**](https://microsoftedge.microsoft.com/addons/detail/koch-brauzer/kmkmnnjonlnhcpdcjfgfhhjepcbakefm) &nbsp;•&nbsp;
-[**🛡 VirusTotal**](https://www.virustotal.com/gui/file/7b4ff34d860c79ada808f309395d926cd4b92ae5c0a254cb64c146f89289fac9?nocache=1)
+[**🛡 VirusTotal**](https://www.virustotal.com/gui/file/2a552d002d6f2ea0c8575a360118a13214faa1d12f2ab0ba00c2478ad8d71a93/community)
 
 </div>
 
