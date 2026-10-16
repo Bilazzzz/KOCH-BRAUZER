@@ -1,7 +1,7 @@
 /* ============ KOCH BRAUZER v3.5 — дефолт размытия 10/5 + схема v4 ============ */
 
 /* ---------- 1. Browser API ---------- */
-const api = typeof browser !== 'undefined' ? browser : chrome;
+const api = typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null);
 const isExt = !!(api && api.runtime && api.runtime.id);
 
 const apiStorage = {
@@ -160,7 +160,7 @@ const DEFAULT_SETTINGS = {
         panelOpacity: 72, cardOpacity: 100,
         panelBlur: 10, cardBlur: 5,
         radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10 },
-        font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1.5 },
+        font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1.5, letterSpacing: 0, titleSpacing: 0.14, subtitleSpacing: 0.12 },
         animations: true, transitionSpeed: 0.28
     }
 };
@@ -196,8 +196,9 @@ let settingsCache = null;
 
 function deepMerge(t, s) {
     const r = { ...t };
-    for (const k in s) {
-        if (s[k] && typeof s[k] === 'object' && !Array.isArray(s[k])) r[k] = deepMerge(t[k] || {}, s[k]);
+    for (const k of Object.keys(s)) {
+        if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+        if (s[k] && typeof s[k] === 'object' && !Array.isArray(s[k])) r[k] = deepMerge(t[k] && typeof t[k] === 'object' ? t[k] : {}, s[k]);
         else r[k] = s[k];
     }
     return r;
@@ -236,7 +237,10 @@ function normalizeAppearance(app) {
             family: typeof f.family === 'string' && f.family ? f.family : d.font.family,
             size: num(f.size, d.font.size, 10, 32),
             weight: num(f.weight, d.font.weight, 100, 900),
-            lineHeight: num(f.lineHeight, d.font.lineHeight, 1, 3)
+            lineHeight: num(f.lineHeight, d.font.lineHeight, 1, 3),
+            letterSpacing: num(f.letterSpacing, d.font.letterSpacing, -0.05, 0.3),
+            titleSpacing: num(f.titleSpacing, d.font.titleSpacing, 0, 0.6),
+            subtitleSpacing: num(f.subtitleSpacing, d.font.subtitleSpacing, 0, 0.6)
         },
         animations: typeof app.animations === 'boolean' ? app.animations : true,
         transitionSpeed: num(app.transitionSpeed, d.transitionSpeed, 0, 2)
@@ -325,8 +329,13 @@ function openMediaDB() {
         idbPromise = new Promise((resolve, reject) => {
             const req = indexedDB.open('koch-brauzer-media', 1);
             req.onupgradeneeded = () => { req.result.createObjectStore('media'); };
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
+            req.onsuccess = () => {
+                const db = req.result;
+                db.onversionchange = () => { db.close(); idbPromise = null; };
+                resolve(db);
+            };
+            req.onerror = () => { idbPromise = null; reject(req.error); };
+            req.onblocked = () => { idbPromise = null; reject(new Error('IndexedDB blocked')); };
         });
     }
     return idbPromise;
@@ -339,6 +348,7 @@ async function mediaPut(key, blob) {
         tx.objectStore('media').put(blob, key);
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
     });
 }
 
@@ -359,6 +369,7 @@ async function mediaDel(key) {
         tx.objectStore('media').delete(key);
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
     });
 }
 
@@ -451,15 +462,20 @@ const store = {
         return clone(s);
     },
     async setSettings(s, inv = true) { if (inv) settingsCache = null; await apiStorage.set({ settings: s }); },
-    async updateSettings(fn) {
-        const cur = await this.getSettings();
-        const merged = deepMerge(clone(DEFAULT_SETTINGS), fn(clone(cur)));
-        await this.setSettings(merged);
-        return merged;
+    _q: Promise.resolve(),
+    updateSettings(fn) {
+        const run = this._q.then(async () => {
+            const cur = await this.getSettings();
+            const merged = deepMerge(clone(DEFAULT_SETTINGS), fn(clone(cur)));
+            await this.setSettings(merged);
+            return merged;
+        });
+        this._q = run.catch(() => {});
+        return run;
     },
-    async getCategories() { const d = await apiStorage.get('categories'); return d.categories || clone(DEFAULT_CATEGORIES); },
+    async getCategories() { const d = await apiStorage.get('categories'); return Array.isArray(d.categories) ? d.categories : clone(DEFAULT_CATEGORIES); },
     async setCategories(c) { await apiStorage.set({ categories: c }); },
-    async getHistory() { const d = await apiStorage.get('history'); return d.history || []; },
+    async getHistory() { const d = await apiStorage.get('history'); return Array.isArray(d.history) ? d.history : []; },
     async setHistory(h) { await apiStorage.set({ history: h }); },
     onSettingsChange(cb) {
         apiStorage.onChanged((changes, area) => {
@@ -550,9 +566,6 @@ function applyCustomThemeVars(hex) {
     const yellow  = hslHex((h + 50) % 360, 75, 70);
     const text    = hslHex(h, S * 0.30, 93);
     const muted   = hslHex(h, S * 0.50, cl(L * 0.8 + 15, 45, 72));
-    const orb1    = hslHex(h, cl(S * 1.15, 40, 95), cl(L, 40, 65));
-    const orb2    = hslHex(h, S * 0.80, cl(L * 0.35, 8, 30));
-    const orb3    = accent2;
 
     const st = document.documentElement.style;
     st.setProperty('--bg', bg);
@@ -567,15 +580,12 @@ function applyCustomThemeVars(hex) {
     st.setProperty('--border', rgbaOf(accent, 0.28));
     st.setProperty('--border-hi', rgbaOf(accent, 0.55));
     st.setProperty('--glow', rgbaOf(accent, 0.35));
-    st.setProperty('--orb1', orb1);
-    st.setProperty('--orb2', orb2);
-    st.setProperty('--orb3', orb3);
 }
 
 function clearCustomThemeVars() {
     const st = document.documentElement.style;
     ['--bg','--panel','--card','--card2','--accent','--accent2','--yellow',
-    '--text','--muted','--border','--border-hi','--glow','--orb1','--orb2','--orb3']
+    '--text','--muted','--border','--border-hi','--glow']
     .forEach(k => st.removeProperty(k));
 }
 
@@ -603,8 +613,13 @@ function applyAppearance(app) {
     const r = document.documentElement;
     r.style.setProperty('--panel-opacity', (app.panelOpacity ?? d.panelOpacity) / 100);
     r.style.setProperty('--card-opacity', (app.cardOpacity ?? d.cardOpacity) / 100);
-    r.style.setProperty('--panel-blur', (app.panelBlur ?? d.panelBlur) + 'px');
-    r.style.setProperty('--card-blur', (app.cardBlur ?? d.cardBlur) + 'px');
+    // blur(0px) всё равно создаёт слой и считается на GPU, поэтому при 0 фильтр выключается совсем
+    const pb = app.panelBlur ?? d.panelBlur, cb = app.cardBlur ?? d.cardBlur;
+    r.style.setProperty('--panel-blur', pb + 'px');
+    r.style.setProperty('--card-blur', cb + 'px');
+    r.style.setProperty('--panel-bf', pb > 0 ? `blur(${pb}px) saturate(130%)` : 'none');
+    r.style.setProperty('--panel-bfp', pb > 0 ? `blur(${pb}px)` : 'none');
+    r.style.setProperty('--card-bf', cb > 0 ? `blur(${cb}px)` : 'none');
     if (app.radius) {
         r.style.setProperty('--radius-card', (app.radius.card ?? d.radius.card) + 'px');
         r.style.setProperty('--radius-panel', (app.radius.panel ?? d.radius.panel) + 'px');
@@ -617,6 +632,9 @@ function applyAppearance(app) {
         r.style.setProperty('--font-size', (app.font.size ?? d.font.size) + 'px');
         r.style.setProperty('--font-weight', app.font.weight ?? d.font.weight);
         r.style.setProperty('--line-height', app.font.lineHeight ?? d.font.lineHeight);
+        r.style.setProperty('--ls', (app.font.letterSpacing ?? d.font.letterSpacing) + 'em');
+        r.style.setProperty('--ls-title', (app.font.titleSpacing ?? d.font.titleSpacing) + 'em');
+        r.style.setProperty('--ls-sub', (app.font.subtitleSpacing ?? d.font.subtitleSpacing) + 'em');
     }
     r.style.setProperty('--transition-speed', (app.transitionSpeed ?? d.transitionSpeed) + 's');
     r.classList.toggle('reduce-motion', app.animations === false);
@@ -673,8 +691,7 @@ async function applyBackgroundNow(preloaded) {
     const bg = s.bg || { type: 'none', url: '', idb: '' };
     const v = document.getElementById('bg-video');
     const i = document.getElementById('bg-image');
-    const o = document.getElementById('bg-orbs');
-    if (!v || !i || !o) return;
+    if (!v || !i) return;
 
     let url = (bg.type !== 'none') ? (bg.url || '') : '';
     let sig = url ? 'url:' + url : '';
@@ -697,21 +714,21 @@ async function applyBackgroundNow(preloaded) {
     document.documentElement.style.setProperty('--bg-opacity', op);
 
     if (bg.type === 'video' && url) {
-        i.hidden = true; o.hidden = true; v.hidden = false;
+        i.hidden = true; v.hidden = false;
         v.style.opacity = op; v.style.filter = filt;
         bgVideoActive = true;
         bgVideoUrl = url;
     } else if (bg.type === 'image' && url) {
         bgVideoActive = false; bgVideoUrl = '';
         releaseVideo(v);
-        v.hidden = true; o.hidden = true; i.hidden = false;
+        v.hidden = true; i.hidden = false;
         i.style.backgroundImage = `url("${url}")`; i.style.opacity = op; i.style.filter = filt;
     } else {
         bgVideoActive = false; bgVideoUrl = '';
         releaseVideo(v);
         v.hidden = true;
         i.hidden = true; i.style.backgroundImage = '';
-        o.hidden = false;
+       
     }
     syncVideoPlayback();
 }
@@ -778,22 +795,32 @@ let tickTimer = null, wxTimer = null, clockSlots = [];
 let clockGen = 0, clocksReady = false, lastWxAt = 0;
 const WX_INTERVAL = 30 * 60 * 1000;
 
+/* fetch с таймаутом и проверкой статуса: раньше зависший запрос или ответ 4xx/5xx
+   молча ломал погоду, а временный сбой сети навсегда кэшировался как «город не найден». */
+async function fetchJson(url, ms = 8000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    try {
+        const r = await fetch(url, { signal: ctrl.signal });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return await r.json();
+    } finally { clearTimeout(t); }
+}
+
 async function geocode(city) {
     if (!city || city === '—') return null;
     if (geoCache.has(city)) return geoCache.get(city);
     try {
-        const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=ru&format=json`);
-        const d = await r.json();
+        const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=ru&format=json`);
         const g = d?.results?.[0];
         const info = g ? { lat: g.latitude, lon: g.longitude, tz: g.timezone || null } : null;
         geoCache.set(city, info);
         return info;
-    } catch { geoCache.set(city, null); return null; }
+    } catch { return null; } // сбой сети не кэшируем: следующая попытка повторит запрос
 }
 
 async function weather(lat, lon) {
-    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&timezone=auto`);
-    const d = await r.json();
+    const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&timezone=auto`);
     return { t: Math.round(d.current.temperature_2m), code: d.current.weather_code };
 }
 
@@ -834,10 +861,10 @@ function tick() {
 async function refreshWeather() {
     const slots = clockSlots;
     const pending = new Map();
-    for (let i = 0; i < slots.length; i++) {
-        const s = slots[i], wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
-        if (!wxEl) continue;
-        if (!s?.geo) { wxEl.textContent = '—'; continue; }
+    await Promise.all(slots.map(async (s, i) => {
+        const wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
+        if (!wxEl) return;
+        if (!s?.geo) { wxEl.textContent = '—'; return; }
         try {
             // один и тот же город в обоих слотах — один запрос вместо двух
             const key = s.geo.lat + ',' + s.geo.lon;
@@ -845,7 +872,7 @@ async function refreshWeather() {
             const w = await pending.get(key);
             wxEl.textContent = `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
         } catch { wxEl.textContent = '—'; }
-    }
+    }));
     lastWxAt = Date.now();
 }
 
@@ -981,11 +1008,29 @@ async function initSearch(preloaded) {
 let categories = [];
 let scModal = { catId: null, scId: null };
 
-async function renderCats() {
-    categories = await store.getCategories();
-    const wrap = $('#cats'); if (!wrap) return;
-    wrap.innerHTML = '';
-    categories.forEach((cat, ci) => wrap.append(buildCard(cat, ci)));
+/* Каждое сохранение вызывало отрисовку дважды (saveCats + storage.onChanged в той же вкладке),
+   и все плитки заново проигрывали анимацию появления. Теперь параллельные вызовы
+   склеиваются в один (с повтором, если данные успели измениться), а анимация входа
+   играет только при первой отрисовке. */
+let catsRendering = null, catsDirty = false, catsFirstRender = true;
+function renderCats() {
+    if (catsRendering) { catsDirty = true; return catsRendering; }
+    catsRendering = (async () => {
+        try {
+            do {
+                catsDirty = false;
+                categories = await store.getCategories();
+                const wrap = $('#cats'); if (!wrap) return;
+                wrap.classList.toggle('no-enter', !catsFirstRender);
+                wrap.innerHTML = '';
+                const frag = document.createDocumentFragment();
+                categories.forEach((cat, ci) => frag.append(buildCard(cat, ci)));
+                wrap.append(frag);
+                catsFirstRender = false;
+            } while (catsDirty);
+        } finally { catsRendering = null; }
+    })();
+    return catsRendering;
 }
 
 function buildCard(cat, ci) {
@@ -1094,7 +1139,12 @@ function buildCard(cat, ci) {
 
 function buildChip(cat, sc, si) {
     const chip = el('div', { class: 'chip', draggable: true,
-        onclick: () => { const u = normalizeUrl(sc.url); if (u) location.href = u; } });
+        onclick: e => {
+            const u = normalizeUrl(sc.url); if (!u) return;
+            if (e.ctrlKey || e.metaKey) window.open(u, '_blank', 'noopener');
+            else location.href = u;
+        },
+        onauxclick: e => { if (e.button === 1) { const u = normalizeUrl(sc.url); if (u) window.open(u, '_blank', 'noopener'); } } });
     chip.style.animationDelay = `${si * 0.05}s`;
     let ico;
     if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:')))
@@ -1396,6 +1446,9 @@ function syncSettingsUI(s) {
     setSlider('set-font-size', f.size ?? d.font.size, 'set-font-size-val', 'px');
     setSlider('set-font-weight', f.weight ?? d.font.weight, 'set-font-weight-val', '');
     setSlider('set-line-height', f.lineHeight ?? d.font.lineHeight, 'set-line-height-val', '');
+    setSlider('set-ls', f.letterSpacing ?? d.font.letterSpacing, 'set-ls-val', 'em');
+    setSlider('set-ls-title', f.titleSpacing ?? d.font.titleSpacing, 'set-ls-title-val', 'em');
+    setSlider('set-ls-sub', f.subtitleSpacing ?? d.font.subtitleSpacing, 'set-ls-sub-val', 'em');
 
     const anim = document.getElementById('set-animations');
     if (anim) anim.checked = app.animations !== false;
@@ -1515,6 +1568,9 @@ function bindSettings() {
     bindSlider('set-font-size', 'font.size', 'set-font-size-val', 'px');
     bindSlider('set-font-weight', 'font.weight', 'set-font-weight-val', '');
     bindSlider('set-line-height', 'font.lineHeight', 'set-line-height-val', '', 0.1);
+    bindSlider('set-ls', 'font.letterSpacing', 'set-ls-val', 'em', 0.01);
+    bindSlider('set-ls-title', 'font.titleSpacing', 'set-ls-title-val', 'em', 0.01);
+    bindSlider('set-ls-sub', 'font.subtitleSpacing', 'set-ls-sub-val', 'em', 0.01);
     on('set-animations', 'change', e => updateAppearanceSetting('animations', e.target.checked));
     bindSlider('set-transition-speed', 'transitionSpeed', 'set-transition-speed-val', 's', 0.01);
 
@@ -1586,7 +1642,7 @@ function bindSettings() {
             else if (includeCatImages) suffix = 'no-bg';
             a.download = `koch-brauzer-${suffix}.json`;
             a.click();
-            URL.revokeObjectURL(a.href);
+            setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 
             const sizeKB = Math.round(blob.size / 1024);
             const sizeStr = sizeKB >= 1024 ? (sizeKB / 1024).toFixed(1) + ' МБ' : sizeKB + ' КБ';
