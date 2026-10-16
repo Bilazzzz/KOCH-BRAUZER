@@ -18,7 +18,10 @@ const apiStorage = {
     },
     async set(items) {
         if (!isExt) {
-            for (const [k, v] of Object.entries(items)) localStorage.setItem('kb_' + k, JSON.stringify(v));
+            for (const [k, v] of Object.entries(items)) {
+                try { localStorage.setItem('kb_' + k, JSON.stringify(v)); }
+                catch (err) { console.warn('[KOCH] storage quota:', k, err); throw err; }
+            }
             return;
         }
         return api.storage.local.set(items);
@@ -618,7 +621,6 @@ function applyAppearance(app) {
     r.style.setProperty('--panel-blur', pb + 'px');
     r.style.setProperty('--card-blur', cb + 'px');
     r.style.setProperty('--panel-bf', pb > 0 ? `blur(${pb}px) saturate(130%)` : 'none');
-    r.style.setProperty('--panel-bfp', pb > 0 ? `blur(${pb}px)` : 'none');
     r.style.setProperty('--card-bf', cb > 0 ? `blur(${cb}px)` : 'none');
     if (app.radius) {
         r.style.setProperty('--radius-card', (app.radius.card ?? d.radius.card) + 'px');
@@ -715,6 +717,7 @@ async function applyBackgroundNow(preloaded) {
 
     // Размытие «стекла» нужно только поверх картинки/видео; на однотонном фоне оно ничего не меняет, но стоит GPU на каждом кадре hover-анимаций.
     document.documentElement.classList.toggle('has-bg', (bg.type === 'video' || bg.type === 'image') && !!url);
+    document.documentElement.classList.toggle('has-video', bg.type === 'video' && !!url);
     if (bg.type === 'video' && url) {
         i.hidden = true; v.hidden = false;
         v.style.opacity = op; v.style.filter = filt;
@@ -861,21 +864,27 @@ function tick() {
 }
 
 async function refreshWeather() {
-    const slots = clockSlots;
+    const slots = clockSlots, gen = clockGen;
     const pending = new Map();
     await Promise.all(slots.map(async (s, i) => {
         const wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
         if (!wxEl) return;
-        if (!s?.geo) { wxEl.textContent = '—'; return; }
+        // повторная попытка геокодинга, если при старте не было сети
+        if (!s.geo && s.city && s.city !== '—') {
+            s.geo = await geocode(s.city);
+            if (s.geo) { s.tz = s.geo.tz || null; s.fmt = null; }
+        }
+        if (gen !== clockGen) return;
+        if (!s.geo) { wxEl.textContent = '—'; return; }
         try {
             // один и тот же город в обоих слотах — один запрос вместо двух
             const key = s.geo.lat + ',' + s.geo.lon;
             if (!pending.has(key)) pending.set(key, weather(s.geo.lat, s.geo.lon));
             const w = await pending.get(key);
-            wxEl.textContent = `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
-        } catch { wxEl.textContent = '—'; }
+            if (gen === clockGen) wxEl.textContent = `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
+        } catch { if (gen === clockGen) wxEl.textContent = '—'; }
     }));
-    lastWxAt = Date.now();
+    if (gen === clockGen) lastWxAt = Date.now();
 }
 
 function stopClockTimers() {

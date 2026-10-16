@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KOCH BRAUZER</title>
 <style>
-:root{--panel-bf:blur(10px) saturate(130%);--panel-bfp:blur(10px);--card-bf:blur(5px);--ls:0em;--ls-title:.14em;--ls-sub:.12em;--panel-opacity:.72;--card-opacity:1;--bg-opacity:1;--panel-blur:10px;--card-blur:5px;--radius-panel:26px;--radius-card:18px;--radius-button:10px;--radius-chip:12px;--radius-input:10px;--font-family:'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;--font-size:16px;--font-weight:400;--line-height:1.5;--transition-speed:.28s;--r-lg:var(--radius-panel);--r-md:var(--radius-card);--r-sm:var(--radius-button);--tr:var(--transition-speed) cubic-bezier(.22,.7,.3,1);--font:var(--font-family)}
+:root{--panel-bf:blur(10px) saturate(130%);--card-bf:blur(5px);--ls:0em;--ls-title:.14em;--ls-sub:.12em;--panel-opacity:.72;--card-opacity:1;--bg-opacity:1;--panel-blur:10px;--card-blur:5px;--radius-panel:26px;--radius-card:18px;--radius-button:10px;--radius-chip:12px;--radius-input:10px;--font-family:'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;--font-size:16px;--font-weight:400;--line-height:1.5;--transition-speed:.28s;--r-lg:var(--radius-panel);--r-md:var(--radius-card);--r-sm:var(--radius-button);--tr:var(--transition-speed) cubic-bezier(.22,.7,.3,1);--font:var(--font-family)}
 [data-theme="rose"]{--bg:#1c0714;--panel:rgba(38,10,28,var(--panel-opacity));--card:rgba(43,13,32,var(--card-opacity));--card2:rgba(58,17,41,var(--card-opacity));--accent:#ff4fa3;--accent2:#ff8ac2;--yellow:#ffcf5e;--text:#ffe3f1;--muted:#b06a92;--border:rgba(255,79,163,.28);--border-hi:rgba(255,79,163,.55);--glow:rgba(255,79,163,.35);}
 [data-theme="purple"]{--bg:#120720;--panel:rgba(26,10,40,var(--panel-opacity));--card:rgba(32,10,51,var(--card-opacity));--card2:rgba(45,17,71,var(--card-opacity));--accent:#a855f7;--accent2:#d8b4fe;--yellow:#fde047;--text:#f3e8ff;--muted:#9d7bc4;--border:rgba(168,85,247,.3);--border-hi:rgba(168,85,247,.6);--glow:rgba(168,85,247,.35);}
 [data-theme="ocean"]{--bg:#04121c;--panel:rgba(6,26,40,var(--panel-opacity));--card:rgba(10,34,51,var(--card-opacity));--card2:rgba(14,47,71,var(--card-opacity));--accent:#38bdf8;--accent2:#7dd3fc;--yellow:#fde047;--text:#e0f2fe;--muted:#6aa3c4;--border:rgba(56,189,248,.28);--border-hi:rgba(56,189,248,.55);--glow:rgba(56,189,248,.3);}
@@ -26,7 +26,7 @@ ul{list-style:none}
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
 html{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
-#bg-video,#bg-image{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:-3}
+#bg-video,#bg-image{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:-3;pointer-events:none;contain:strict}
 #bg-image{background-size:cover;background-position:center}
 #bg-dim{position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 50% 40%,transparent 0%,var(--bg) 130%);opacity:.55}
 .topbar{position:fixed;top:0;left:0;right:0;z-index:40;display:flex;justify-content:space-between;align-items:center;padding:16px 22px;animation:fadeDown .6s var(--tr) backwards}
@@ -36,18 +36,20 @@ html{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 .pill-btn:hover{border-color:var(--border-hi);transform:translateY(-2px);box-shadow:0 6px 18px var(--glow)}
 .panel{width:min(1180px,94vw);margin:96px auto 60px;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:0 0 0 1px rgba(0,0,0,.2),0 24px 80px rgba(0,0,0,.45),0 0 60px var(--glow);padding:26px 26px 30px;animation:panelIn .8s cubic-bezier(.22,.7,.3,1) backwards;position:relative;isolation:isolate}
 .panel::before{content:'';position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;background:var(--panel);box-shadow:inset 0 1px 0 rgba(255,255,255,.06);backdrop-filter:var(--panel-bf);-webkit-backdrop-filter:var(--panel-bf)}
-html:not(.has-bg) .panel::before,html:not(.has-bg) .pill-btn,html:not(.has-bg) .overlay,html:not(.has-bg) .toast{backdrop-filter:none;-webkit-backdrop-filter:none}
+.cat-card,.clock-card{backdrop-filter:var(--card-bf);-webkit-backdrop-filter:var(--card-bf)}
+html.has-video .cat-card,html.has-video .clock-card,html.has-video .pill-btn{backdrop-filter:none;-webkit-backdrop-filter:none}
+html:not(.has-bg) .cat-card,html:not(.has-bg) .clock-card,html:not(.has-bg) .panel::before,html:not(.has-bg) .pill-btn,html:not(.has-bg) .overlay,html:not(.has-bg) .toast{backdrop-filter:none;-webkit-backdrop-filter:none}
 @keyframes panelIn{from{opacity:0;transform:translateY(34px) scale(.97)}to{opacity:1;transform:none}}
 @keyframes fadeDown{from{opacity:0;transform:translateY(-16px)}to{opacity:1;transform:none}}
 @keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
 .clocks{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .clock-card{background:color-mix(in srgb,var(--card) 82%,transparent);border:1px solid var(--border);border-radius:var(--r-md);padding:14px 18px 12px;text-align:center;transition:transform var(--tr),border-color var(--tr),background-color var(--tr),box-shadow var(--tr),color var(--tr),opacity var(--tr);animation:fadeUp .7s .1s var(--tr) backwards}
-.clock-card{position:relative}
-.clock-card::after,.chip::after{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity var(--tr)}
+.clock-card{position:relative;contain:layout style}
+.clock-card::after,.chip::after{content:'';position:absolute;inset:-1px;box-sizing:border-box;border:1px solid var(--border-hi);border-radius:inherit;pointer-events:none;opacity:0;transition:opacity var(--tr)}
 .clock-card::after{box-shadow:0 10px 30px var(--glow)}
 .chip::after{box-shadow:0 6px 18px var(--glow)}
 .clock-card:hover::after,.chip:hover::after{opacity:1}
-.clock-card:hover{border-color:var(--border-hi);transform:translateY(-3px)}
+.clock-card:hover{transform:translateY(-3px)}
 .clock-city{font-size:.7rem;letter-spacing:calc(.25em + var(--ls));text-transform:uppercase;color:var(--muted);font-weight:700}
 .clock-time{font-size:1.7rem;font-weight:800;letter-spacing:calc(.04em + var(--ls));margin:2px 0 8px;text-shadow:0 0 22px var(--glow)}
 .clock-wx{background:color-mix(in srgb,var(--card2) 70%,transparent);border-radius:var(--r-sm);padding:7px 10px;font-size:.85rem;font-weight:700}
@@ -56,7 +58,6 @@ html:not(.has-bg) .panel::before,html:not(.has-bg) .pill-btn,html:not(.has-bg) .
 .avatar img{width:100%;height:100%;object-fit:cover}
 #avatar-fallback{font-size:2.4rem;font-weight:800;color:var(--accent2);text-shadow:0 0 18px var(--glow)}
 .title{font-size:clamp(1.7rem,4.2vw,2.9rem);font-weight:800;letter-spacing:calc(var(--ls-title) + var(--ls));background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(0 0 24px var(--glow));animation:fadeUp .7s .22s var(--tr) backwards}
-@keyframes glowPulse{0%,100%{filter:drop-shadow(0 0 14px var(--glow))}50%{filter:drop-shadow(0 0 34px var(--glow))}}
 .subtitle{font-size:.78rem;letter-spacing:calc(var(--ls-sub) + var(--ls));text-transform:uppercase;color:var(--yellow);font-weight:700;animation:fadeUp .7s .3s var(--tr) backwards}
 .search-row{position:relative;margin-bottom:26px;animation:fadeUp .7s .36s var(--tr) backwards}
 .search-bar{display:flex;align-items:center;gap:8px;background:color-mix(in srgb,var(--card) 88%,transparent);border:1px solid var(--border);border-radius:999px;padding:7px 7px 7px 8px;transition:transform var(--tr),border-color var(--tr),background-color var(--tr),box-shadow var(--tr),color var(--tr),opacity var(--tr)}
@@ -92,7 +93,7 @@ html:not(.has-bg) .panel::before,html:not(.has-bg) .pill-btn,html:not(.has-bg) .
 .cat-add:hover{color:var(--accent);background:var(--card2);transform:scale(1.12)}
 .chips{display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:10px;flex:1;align-content:start}
 .chip{position:relative;width:100%;max-width:120px;justify-self:center;padding:12px 6px 10px;display:flex;flex-direction:column;align-items:center;gap:8px;background:color-mix(in srgb,var(--card2) 72%,transparent);border:1px solid transparent;border-radius:var(--radius-chip);cursor:pointer;transition:transform var(--tr),border-color var(--tr),background-color var(--tr),box-shadow var(--tr),color var(--tr),opacity var(--tr);animation:fadeUp .5s var(--tr) backwards;box-sizing:border-box}
-.chip:hover{border-color:var(--border-hi);transform:translateY(-2px)}
+.chip:hover{transform:translateY(-2px)}
 .chip-ico{width:40px;height:40px;display:grid;place-items:center;font-size:1.35rem;overflow:hidden}
 .chip-ico img{width:100%;height:100%;object-fit:contain;border-radius:8px;display:block}
 .chip-ico span{font-size:1.3rem;line-height:1}
@@ -155,12 +156,12 @@ html:not(.has-bg) .panel::before,html:not(.has-bg) .pill-btn,html:not(.has-bg) .
 .btn-small{padding:6px 12px;font-size:.78rem;font-weight:600;border-radius:var(--r-sm);background:color-mix(in srgb,var(--card2) 80%,transparent);border:1px solid var(--border);color:var(--text);cursor:pointer;transition:transform var(--tr),border-color var(--tr),background-color var(--tr),box-shadow var(--tr),color var(--tr),opacity var(--tr)}
 .btn-small:hover{border-color:var(--border-hi);background:var(--card2)}
 /* Perf: hover только через compositor (transform/opacity). Анимация border-color/box-shadow перерисовывала плитки на каждом кадре. */
-.chip,.clock-card{will-change:transform;transition:transform var(--tr)}
+.chip,.clock-card{transition:transform var(--tr)}
 .cat-card{transition:none}
 </style>
 </head>
 <body data-theme="rose">
-  <video id="bg-video" muted loop playsinline preload="auto" disablepictureinpicture hidden></video>
+  <video id="bg-video" muted loop playsinline preload="auto" disablepictureinpicture disableremoteplayback hidden></video>
   <div id="bg-image" hidden></div>
   <div id="bg-dim"></div>
 

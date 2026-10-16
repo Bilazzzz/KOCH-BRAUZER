@@ -271,13 +271,3 @@ api.runtime.onStartup.addListener(async () => {
     console.error('[KOCH] Startup error:', err);
   }
 });
-
-api.runtime.onInstalled.addListener(({ reason }) => {
-  console.log('[KOCH] onInstalled:', reason);
-});
-
-if (api.action && api.action.onClicked) {
-  api.action.onClicked.addListener(() => {
-    api.tabs.create({});
-  });
-}
