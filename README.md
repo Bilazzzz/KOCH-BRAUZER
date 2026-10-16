@@ -1,38 +1,10 @@
 # KOCH BRAUZER
 
-**Твоя стартовая страница.** Минималистичная, быстрая и глубоко настраиваемая страница новой вкладки для Mozilla Firefox.
-
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-ff4fa3)
 ![Firefox](https://img.shields.io/badge/Firefox-142%2B-ff8ac2)
 ![Chrome](https://img.shields.io/badge/Chrome-142%2B-4285F4)
 ![Build](https://img.shields.io/badge/Build-none%20required-34d399)
 ![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg)
-
-> Неон, стекло — плюс полная кастомизация: темы, прозрачность, скругления, шрифты, анимации и фоновое видео. Без сборки, без зависимостей, без телеметрии.
-
----
-
-## 🚀 Установка
-
-# FireFox
-
-### https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/
-
-# Edge
-
-### https://microsoftedge.microsoft.com/addons/detail/koch-brauzer/kmkmnnjonlnhcpdcjfgfhhjepcbakefm
-
----
-
-## VirusTotal
-
-### https://www.virustotal.com/gui/file/7b4ff34d860c79ada808f309395d926cd4b92ae5c0a254cb64c146f89289fac9?nocache=1
-
----
-
-> Расширение заменяет стандартную страницу новой вкладки — просто открой новую вкладку.
-
----
 
 ## 📸 Скриншоты
 
@@ -52,7 +24,27 @@
   </tr>
 </table>
 
+## 🚀 Установка
+
+# FireFox
+
+### https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/
+
+# Edge
+
+### https://microsoftedge.microsoft.com/addons/detail/koch-brauzer/kmkmnnjonlnhcpdcjfgfhhjepcbakefm
+
+## VirusTotal
+
+### https://www.virustotal.com/gui/file/7b4ff34d860c79ada808f309395d926cd4b92ae5c0a254cb64c146f89289fac9?nocache=1
+
 ---
+
+> Расширение заменяет стандартную страницу новой вкладки — просто открой новую вкладку.
+
+---
+
+
 
 ## ✨ Возможности
 
