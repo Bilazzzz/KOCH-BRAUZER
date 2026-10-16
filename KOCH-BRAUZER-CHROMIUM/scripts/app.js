@@ -713,6 +713,8 @@ async function applyBackgroundNow(preloaded) {
     const filt = bl > 0 ? `blur(${bl}px)` : 'none';
     document.documentElement.style.setProperty('--bg-opacity', op);
 
+    // Размытие «стекла» нужно только поверх картинки/видео; на однотонном фоне оно ничего не меняет, но стоит GPU на каждом кадре hover-анимаций.
+    document.documentElement.classList.toggle('has-bg', (bg.type === 'video' || bg.type === 'image') && !!url);
     if (bg.type === 'video' && url) {
         i.hidden = true; v.hidden = false;
         v.style.opacity = op; v.style.filter = filt;
