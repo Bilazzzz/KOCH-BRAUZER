@@ -66,7 +66,7 @@
 
 1. Открой `about:debugging#/runtime/this-firefox`.
 2. Нажми **Загрузить временное дополнение**.
-3. Выбери файл `KOCH-BRAUZER/manifest.json`.
+3. Выбери файл `KOCH-BRAUZER-FIREFOX/manifest.json`.
 
 </details>
 
