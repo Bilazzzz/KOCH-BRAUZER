@@ -2,10 +2,11 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+<script src="scripts/pre.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KOCH BRAUZER</title>
 <style>
-:root{--panel-bf:blur(10px) saturate(130%);--card-bf:blur(5px);--ls:0em;--ls-title:.14em;--ls-sub:.12em;--panel-opacity:.72;--card-opacity:1;--bg-opacity:1;--panel-blur:10px;--card-blur:5px;--radius-panel:26px;--radius-card:18px;--radius-button:10px;--radius-chip:12px;--radius-input:10px;--font-family:'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;--font-size:16px;--font-weight:400;--line-height:1.5;--transition-speed:.28s;--r-lg:var(--radius-panel);--r-md:var(--radius-card);--r-sm:var(--radius-button);--tr:var(--transition-speed) cubic-bezier(.22,.7,.3,1);--font:var(--font-family)}
+:root{--panel-bf:blur(10px) saturate(130%);--card-bf:blur(5px);--ls:0em;--ls-title:.14em;--ls-sub:.12em;--panel-opacity:.72;--card-opacity:1;--bg-opacity:1;--panel-blur:10px;--card-blur:5px;--radius-panel:26px;--radius-card:18px;--radius-button:10px;--radius-chip:12px;--radius-input:10px;--font-family:'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;--font-size:16px;--font-weight:400;--line-height:1;--transition-speed:.28s;--r-lg:var(--radius-panel);--r-md:var(--radius-card);--r-sm:var(--radius-button);--tr:var(--transition-speed) cubic-bezier(.22,.7,.3,1);--font:var(--font-family)}
 [data-theme="rose"]{--bg:#1c0714;--panel:rgba(38,10,28,var(--panel-opacity));--card:rgba(43,13,32,var(--card-opacity));--card2:rgba(58,17,41,var(--card-opacity));--accent:#ff4fa3;--accent2:#ff8ac2;--yellow:#ffcf5e;--text:#ffe3f1;--muted:#b06a92;--border:rgba(255,79,163,.28);--border-hi:rgba(255,79,163,.55);--glow:rgba(255,79,163,.35);}
 [data-theme="purple"]{--bg:#120720;--panel:rgba(26,10,40,var(--panel-opacity));--card:rgba(32,10,51,var(--card-opacity));--card2:rgba(45,17,71,var(--card-opacity));--accent:#a855f7;--accent2:#d8b4fe;--yellow:#fde047;--text:#f3e8ff;--muted:#9d7bc4;--border:rgba(168,85,247,.3);--border-hi:rgba(168,85,247,.6);--glow:rgba(168,85,247,.35);}
 [data-theme="ocean"]{--bg:#04121c;--panel:rgba(6,26,40,var(--panel-opacity));--card:rgba(10,34,51,var(--card-opacity));--card2:rgba(14,47,71,var(--card-opacity));--accent:#38bdf8;--accent2:#7dd3fc;--yellow:#fde047;--text:#e0f2fe;--muted:#6aa3c4;--border:rgba(56,189,248,.28);--border-hi:rgba(56,189,248,.55);--glow:rgba(56,189,248,.3);}
@@ -158,6 +159,25 @@ html:not(.has-bg) .cat-card,html:not(.has-bg) .clock-card,html:not(.has-bg) .pan
 /* Perf: hover только через compositor (transform/opacity). Анимация border-color/box-shadow перерисовывала плитки на каждом кадре. */
 .chip,.clock-card{transition:transform var(--tr)}
 .cat-card{transition:none}
+html.kb-pre body{visibility:hidden}
+@keyframes panelIn{from{transform:translateY(24px) scale(.98)}to{transform:none}}
+.chip,.chip img{-webkit-user-drag:none;user-select:none}
+.chip{-webkit-user-drag:element}
+/* компактные настройки */
+#settings-overlay .modal{width:min(1000px,96vw);max-height:92vh}
+#settings-overlay .modal-head{padding:8px 14px}
+#settings-overlay .modal-body{padding:8px 14px 12px;display:grid;grid-template-columns:repeat(4,1fr);gap:4px 12px}
+#settings-overlay .grp,#settings-overlay .hint,#settings-overlay .row2,#settings-overlay .modal-actions,#settings-overlay .fld:has(input[type=file]),#settings-overlay .fld:has(input[type=url]),#settings-overlay .fld.check{grid-column:1/-1}
+#settings-overlay .grp{margin-top:2px;padding-bottom:2px;font-size:.64rem}
+#settings-overlay .fld{gap:2px;font-size:.72rem;min-width:0}
+#settings-overlay .fld input[type=text],#settings-overlay .fld input[type=url],#settings-overlay .fld select{padding:4px 8px;font-size:.8rem}
+#settings-overlay .row2{gap:6px 12px}
+#settings-overlay .hint{font-size:.66rem;line-height:1.25}
+#settings-overlay .btn{padding:6px 12px}
+#settings-overlay .fld:has(input[type=range]){display:grid;grid-template-columns:1fr auto;align-items:center;column-gap:6px}
+#settings-overlay .fld input[type=range]{grid-column:1/-1;margin:6px 0 5px;height:6px}
+#settings-overlay .fld>span{color:var(--accent2);font-weight:700}
+.modal{contain:layout paint}
 </style>
 </head>
 <body data-theme="rose">
@@ -297,7 +317,7 @@ html:not(.has-bg) .cat-card,html:not(.has-bg) .clock-card,html:not(.has-bg) .pan
         </label>
         <label class="fld">Размер: <span id="set-font-size-val">16px</span><input id="set-font-size" type="range" min="12" max="24" value="16"></label>
         <label class="fld">Толщина: <span id="set-font-weight-val">400</span><input id="set-font-weight" type="range" min="300" max="700" step="100" value="400"></label>
-        <label class="fld">Межстрочный: <span id="set-line-height-val">1.5</span><input id="set-line-height" type="range" min="1" max="2" step="0.1" value="1.5"></label>
+        <label class="fld">Межстрочный: <span id="set-line-height-val">1</span><input id="set-line-height" type="range" min="1" max="2" step="0.1" value="1"></label>
         <label class="fld">Интервал букв (везде): <span id="set-ls-val">0em</span><input id="set-ls" type="range" min="-0.05" max="0.3" step="0.01" value="0"></label>
         <label class="fld">Интервал букв заголовка: <span id="set-ls-title-val">0.14em</span><input id="set-ls-title" type="range" min="0" max="0.6" step="0.01" value="0.14"></label>
         <label class="fld">Интервал букв подзаголовка: <span id="set-ls-sub-val">0.12em</span><input id="set-ls-sub" type="range" min="0" max="0.6" step="0.01" value="0.12"></label>

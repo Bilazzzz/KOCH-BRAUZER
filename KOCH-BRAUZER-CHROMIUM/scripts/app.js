@@ -163,7 +163,7 @@ const DEFAULT_SETTINGS = {
         panelOpacity: 72, cardOpacity: 100,
         panelBlur: 10, cardBlur: 5,
         radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10 },
-        font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1.5, letterSpacing: 0, titleSpacing: 0.14, subtitleSpacing: 0.12 },
+        font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1, letterSpacing: 0, titleSpacing: 0.14, subtitleSpacing: 0.12 },
         animations: true, transitionSpeed: 0.28
     }
 };
@@ -192,7 +192,7 @@ const DEFAULT_CATEGORIES = [
 ]}
 ];
 
-const CURRENT_SCHEMA = 4;
+const CURRENT_SCHEMA = 5;
 const PROFILE_FORMAT_VERSION = 3;
 const MEDIA_KEY = 'bg-media';
 let settingsCache = null;
@@ -274,6 +274,7 @@ function migrateSettings(s, ver) {
         if ((oldApp.panelBlur ?? 0) === 0) m.appearance.panelBlur = DEFAULT_SETTINGS.appearance.panelBlur;
         if ((oldApp.cardBlur ?? 0) === 0) m.appearance.cardBlur = DEFAULT_SETTINGS.appearance.cardBlur;
     }
+    if (ver < 5 && m.appearance.font.lineHeight === 1.5) m.appearance.font.lineHeight = 1;
     return m;
 }
 
@@ -695,6 +696,11 @@ async function applyBackgroundNow(preloaded) {
     const i = document.getElementById('bg-image');
     if (!v || !i) return;
 
+    const root = document.documentElement;
+    const isMedia = bg.type === 'video' || bg.type === 'image';
+    // классы СРАЗУ, до асинхронного чтения из IndexedDB
+    root.classList.toggle('has-bg', isMedia && !!(bg.url || bg.idb));
+    root.classList.toggle('has-video', bg.type === 'video' && !!(bg.url || bg.idb));
     let url = (bg.type !== 'none') ? (bg.url || '') : '';
     let sig = url ? 'url:' + url : '';
     if (bg.type !== 'none' && bg.idb) {
@@ -718,6 +724,12 @@ async function applyBackgroundNow(preloaded) {
     // Размытие «стекла» нужно только поверх картинки/видео; на однотонном фоне оно ничего не меняет, но стоит GPU на каждом кадре hover-анимаций.
     document.documentElement.classList.toggle('has-bg', (bg.type === 'video' || bg.type === 'image') && !!url);
     document.documentElement.classList.toggle('has-video', bg.type === 'video' && !!url);
+    // кэш для мгновенного старта (читает scripts/pre.js)
+    try {
+        localStorage.setItem('kb-bgc', url ? bg.type : '');
+        localStorage.setItem('kb-th', document.body.dataset.theme || '');
+        localStorage.setItem('kb-css', root.style.cssText);
+    } catch {}
     if (bg.type === 'video' && url) {
         i.hidden = true; v.hidden = false;
         v.style.opacity = op; v.style.filter = filt;
@@ -1131,21 +1143,38 @@ function buildCard(cat, ci) {
         }
     });
     head.addEventListener('dragstart', e => {
-        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'cat', id: cat.id }));
+        dragState = { type: 'cat', id: cat.id };
+        e.dataTransfer.setData('text/plain', 'cat');
         e.dataTransfer.effectAllowed = 'move';
     });
-    card.addEventListener('dragover', e => { e.preventDefault(); card.classList.add('drag-over'); });
-    card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
+    head.addEventListener('dragend', clearDrag);
+    card.addEventListener('dragover', e => {
+        if (!dragState) return;
+        e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+        card.classList.add('drag-over');
+    });
+    card.addEventListener('dragleave', e => { if (!card.contains(e.relatedTarget)) card.classList.remove('drag-over'); });
     card.addEventListener('drop', e => {
-        e.preventDefault(); card.classList.remove('drag-over');
-        let data; try { data = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
-        if (data.type === 'chip') moveChip(data.catId, data.id, cat.id);
-        else if (data.type === 'cat' && data.id !== cat.id) moveCat(data.id, cat.id);
+        e.preventDefault(); e.stopPropagation();
+        const dr = dragState; clearDrag();
+        if (!dr) return;
+        if (dr.type === 'chip') {
+            const t = e.target.closest && e.target.closest('.chip');
+            let after = false;
+            if (t) { const r = t.getBoundingClientRect(); after = e.clientX > r.left + r.width / 2; }
+            moveChip(dr.catId, dr.id, cat.id, t && t.dataset.id, after);
+        } else if (dr.type === 'cat' && dr.id !== cat.id) moveCat(dr.id, cat.id);
     });
         const chips = el('div', { class: 'chips' });
         (cat.shortcuts || []).forEach((sc, si) => chips.append(buildChip(cat, sc, si)));
         card.append(head, chips);
         return card;
+}
+
+let dragState = null;
+function clearDrag() {
+    dragState = null;
+    document.querySelectorAll('.dragging,.drag-over').forEach(n => n.classList.remove('dragging', 'drag-over'));
 }
 
 function buildChip(cat, sc, si) {
@@ -1159,9 +1188,9 @@ function buildChip(cat, sc, si) {
     chip.style.animationDelay = `${si * 0.05}s`;
     let ico;
     if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:')))
-        ico = el('img', { src: sc.icon, alt: '', onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
+        ico = el('img', { src: sc.icon, alt: '', draggable: false, onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
     else if (sc.icon) ico = el('span', {}, sc.icon);
-    else ico = el('img', { src: faviconOf(sc.url), alt: '', onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
+    else ico = el('img', { src: faviconOf(sc.url), alt: '', draggable: false, onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
     chip.append(
         el('div', { class: 'chip-tools' },
            el('button', { onclick: e => { e.stopPropagation(); openScModal(cat.id, sc.id); } }, '✎'),
@@ -1174,13 +1203,15 @@ function buildChip(cat, sc, si) {
         el('div', { class: 'chip-ico' }, ico),
                 el('div', { class: 'chip-name', title: sc.title }, sc.title)
     );
+    chip.dataset.id = sc.id;
     chip.addEventListener('dragstart', e => {
         e.stopPropagation();
-        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'chip', catId: cat.id, id: sc.id }));
+        dragState = { type: 'chip', catId: cat.id, id: sc.id };
+        e.dataTransfer.setData('text/plain', 'chip');
         e.dataTransfer.effectAllowed = 'move';
-        chip.classList.add('dragging');
+        setTimeout(() => chip.classList.add('dragging'), 0); // не менять DOM синхронно: Chrome может отменить drag
     });
-    chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+    chip.addEventListener('dragend', clearDrag);
     return chip;
 }
 
@@ -1189,12 +1220,17 @@ async function saveCats() {
     renderCats();
 }
 
-function moveChip(from, scId, to) {
+function moveChip(from, scId, to, targetId, after) {
     const s = categories.find(c => c.id === from), d = categories.find(c => c.id === to);
-    if (!s || !d || from === to) return;
+    if (!s || !d || targetId === scId || (from === to && !targetId)) return;
     const idx = s.shortcuts.findIndex(x => x.id === scId);
     if (idx === -1) return;
-    const [sc] = s.shortcuts.splice(idx, 1); d.shortcuts.push(sc); saveCats();
+    const [sc] = s.shortcuts.splice(idx, 1);
+    let pos = d.shortcuts.length;
+    const t = targetId ? d.shortcuts.findIndex(x => x.id === targetId) : -1;
+    if (t !== -1) pos = t + (after ? 1 : 0);
+    d.shortcuts.splice(pos, 0, sc);
+    saveCats();
 }
 
 function moveCat(dragId, targetId) {
@@ -1760,9 +1796,11 @@ async function boot() {
         store.onSettingsChange(sync);
         store.onCategoriesChange(renderCats);
 
+        document.documentElement.classList.remove('kb-pre');
         console.info(`[KOCH] Загружено за ${Math.round(performance.now() - start)}ms`);
     } catch (err) {
         console.error('[KOCH] Boot error:', err);
+        document.documentElement.classList.remove('kb-pre');
         toast('Ошибка инициализации', 'error');
     }
 }
