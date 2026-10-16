@@ -37,6 +37,26 @@ function isExternalOrRealNavigation(url) {
   return true;
 }
 
+function isNavigationInFlight(tab) {
+  if (!tab) return false;
+
+  if (tab.pendingUrl && isExternalOrRealNavigation(tab.pendingUrl)) {
+    return true;
+  }
+
+  return tab.status === 'loading';
+}
+
+function dropStartupCandidate(tabId) {
+  const candidate = startupCandidates.get(tabId);
+
+  if (candidate?.timer) {
+    clearTimeout(candidate.timer);
+  }
+
+  startupCandidates.delete(tabId);
+}
+
 async function replaceStartupCandidate(tabId) {
   const candidate = startupCandidates.get(tabId);
 
@@ -71,6 +91,18 @@ async function replaceStartupCandidate(tabId) {
       console.log(
         '[KOCH] Startup candidate rejected:',
         currentUrl
+      );
+      return;
+    }
+
+    // about:blank во время запуска часто означает, что внешняя ссылка
+    // (например, из клиента Epic Games) ещё загружается: tab.url остаётся
+    // about:blank, пока навигация не зафиксирована. Такую вкладку нельзя
+    // подменять страницей расширения.
+    if (currentUrl === 'about:blank' && isNavigationInFlight(tab)) {
+      console.log(
+        '[KOCH] about:blank tab is loading a real navigation, leaving untouched:',
+        tab.pendingUrl || tab.status
       );
       return;
     }
@@ -132,6 +164,22 @@ if (api.tabs && api.tabs.onUpdated) {
     const candidate = startupCandidates.get(tabId);
 
     if (!candidate) {
+      return;
+    }
+
+    // Начало загрузки на вкладке about:blank = идёт реальная навигация
+    // (внешняя ссылка ещё не зафиксировала URL). Не трогаем вкладку.
+    if (
+      changeInfo.status === 'loading' &&
+      candidate.initialUrl === 'about:blank' &&
+      (!tab || !tab.url || tab.url === 'about:blank')
+    ) {
+      dropStartupCandidate(tabId);
+
+      console.log(
+        '[KOCH] Navigation started on about:blank, leaving tab untouched'
+      );
+
       return;
     }
 
