@@ -158,10 +158,10 @@ const DEFAULT_SETTINGS = {
     cities: ['Воткинск', 'Уральск'],
     avatar: '',
     engine: 'google',
-    bg: { type: 'none', url: '', idb: '', opacity: 100, blur: 0 },
+    bg: { type: 'none', url: '', idb: '', opacity: 100 },
     appearance: {
-        panelOpacity: 72, cardOpacity: 100,
-        panelBlur: 10, cardBlur: 5,
+        panelOpacity: 30, cardOpacity: 45,
+        panelBlur: 10, historyBlur: 12,
         radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10 },
         font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1, letterSpacing: 0, titleSpacing: 0.14, subtitleSpacing: 0.12 },
         animations: true, transitionSpeed: 0.28
@@ -192,20 +192,10 @@ const DEFAULT_CATEGORIES = [
 ]}
 ];
 
-const CURRENT_SCHEMA = 5;
+const CURRENT_SCHEMA = 6;
 const PROFILE_FORMAT_VERSION = 3;
 const MEDIA_KEY = 'bg-media';
 let settingsCache = null;
-
-function deepMerge(t, s) {
-    const r = { ...t };
-    for (const k of Object.keys(s)) {
-        if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-        if (s[k] && typeof s[k] === 'object' && !Array.isArray(s[k])) r[k] = deepMerge(t[k] && typeof t[k] === 'object' ? t[k] : {}, s[k]);
-        else r[k] = s[k];
-    }
-    return r;
-}
 
 /* ---------- 5. Нормализация и миграция ---------- */
 function normalizeBg(bg) {
@@ -214,8 +204,7 @@ function normalizeBg(bg) {
         type: ['none', 'image', 'video'].includes(bg.type) ? bg.type : 'none',
         url: typeof bg.url === 'string' ? bg.url : '',
         idb: typeof bg.idb === 'string' ? bg.idb : '',
-        opacity: num(bg.opacity, 100, 0, 100),
-        blur: num(bg.blur, 0, 0, 20)
+        opacity: num(bg.opacity, 100, 0, 100)
     };
 }
 
@@ -228,7 +217,7 @@ function normalizeAppearance(app) {
         panelOpacity: num(app.panelOpacity, d.panelOpacity, 0, 100),
         cardOpacity: num(app.cardOpacity, d.cardOpacity, 0, 100),
         panelBlur: num(app.panelBlur, d.panelBlur, 0, 20),
-        cardBlur: num(app.cardBlur, d.cardBlur, 0, 20),
+        historyBlur: num(app.historyBlur, d.historyBlur, 0, 30),
         radius: {
             card: num(r.card, d.radius.card, 0, 50),
             panel: num(r.panel, d.radius.panel, 0, 50),
@@ -266,13 +255,12 @@ function normalizeSettings(s) {
     };
 }
 
-/* Миграция схемы хранилища: v3 -> v4 (новые дефолты размытия 10/5) */
+/* Миграция схемы хранилища */
 function migrateSettings(s, ver) {
     const m = normalizeSettings(s);
     if (ver < 4) {
         const oldApp = s && typeof s === 'object' && s.appearance ? s.appearance : {};
         if ((oldApp.panelBlur ?? 0) === 0) m.appearance.panelBlur = DEFAULT_SETTINGS.appearance.panelBlur;
-        if ((oldApp.cardBlur ?? 0) === 0) m.appearance.cardBlur = DEFAULT_SETTINGS.appearance.cardBlur;
     }
     if (ver < 5 && m.appearance.font.lineHeight === 1.5) m.appearance.font.lineHeight = 1;
     return m;
@@ -461,7 +449,7 @@ const store = {
             await this.setSettings(s, false);
             await apiStorage.set({ schemaVersion: CURRENT_SCHEMA });
         }
-        s = deepMerge(clone(DEFAULT_SETTINGS), s);
+        s = normalizeSettings(s);   // отбрасывает устаревшие ключи (например, старые blur фона/карточек)
         settingsCache = s;
         return clone(s);
     },
@@ -470,7 +458,7 @@ const store = {
     updateSettings(fn) {
         const run = this._q.then(async () => {
             const cur = await this.getSettings();
-            const merged = deepMerge(clone(DEFAULT_SETTINGS), fn(clone(cur)));
+            const merged = normalizeSettings(fn(clone(cur)));
             await this.setSettings(merged);
             return merged;
         });
@@ -494,11 +482,9 @@ const store = {
     async reset() { settingsCache = null; await apiStorage.clear(); },
 
     async exportAll(opts = {}) {
-        const { includeMedia = true, includeCatImages = true } = opts;
+        const { includeMedia = true } = opts;
         const data = await apiStorage.get(['settings', 'categories', 'history']);
-
-        let cats = data.categories || clone(DEFAULT_CATEGORIES);
-        if (!includeCatImages) cats = cats.map(c => ({ ...c, image: '' }));
+        const cats = data.categories || clone(DEFAULT_CATEGORIES);
 
         const profile = {
             format: 'koch-brauzer-profile',
@@ -527,7 +513,10 @@ const store = {
             const inBackup = migrated.media.some(m => m.id === migrated.settings.bg.idb);
             if (!inBackup) {
                 const exists = await mediaGet(migrated.settings.bg.idb).catch(() => null);
-                if (!exists) migrated.settings.bg.idb = '';
+                if (!exists) {
+                    migrated.settings.bg.idb = '';
+                    if (!migrated.settings.bg.url) migrated.settings.bg.type = 'none';
+                }
             }
         }
 
@@ -618,11 +607,11 @@ function applyAppearance(app) {
     r.style.setProperty('--panel-opacity', (app.panelOpacity ?? d.panelOpacity) / 100);
     r.style.setProperty('--card-opacity', (app.cardOpacity ?? d.cardOpacity) / 100);
     // blur(0px) всё равно создаёт слой и считается на GPU, поэтому при 0 фильтр выключается совсем
-    const pb = app.panelBlur ?? d.panelBlur, cb = app.cardBlur ?? d.cardBlur;
+    const pb = app.panelBlur ?? d.panelBlur;
     r.style.setProperty('--panel-blur', pb + 'px');
-    r.style.setProperty('--card-blur', cb + 'px');
-    r.style.setProperty('--panel-bf', pb > 0 ? `blur(${pb}px) saturate(130%)` : 'none');
-    r.style.setProperty('--card-bf', cb > 0 ? `blur(${cb}px)` : 'none');
+    r.style.setProperty('--panel-bf', pb > 0 ? `blur(${pb}px)` : 'none');
+    const hb = app.historyBlur ?? d.historyBlur;
+    r.style.setProperty('--sg-bf', hb > 0 ? `blur(${hb}px)` : 'none');
     if (app.radius) {
         r.style.setProperty('--radius-card', (app.radius.card ?? d.radius.card) + 'px');
         r.style.setProperty('--radius-panel', (app.radius.panel ?? d.radius.panel) + 'px');
@@ -699,8 +688,7 @@ async function applyBackgroundNow(preloaded) {
     const root = document.documentElement;
     const isMedia = bg.type === 'video' || bg.type === 'image';
     // классы СРАЗУ, до асинхронного чтения из IndexedDB
-    root.classList.toggle('has-bg', isMedia && !!(bg.url || bg.idb));
-    root.classList.toggle('has-video', bg.type === 'video' && !!(bg.url || bg.idb));
+    root.classList.toggle('no-bg', !(isMedia && (bg.url || bg.idb)));
     let url = (bg.type !== 'none') ? (bg.url || '') : '';
     let sig = url ? 'url:' + url : '';
     if (bg.type !== 'none' && bg.idb) {
@@ -717,29 +705,20 @@ async function applyBackgroundNow(preloaded) {
     bgObjectUrl = (url && url.startsWith('blob:')) ? url : null;
 
     const op = (bg.opacity ?? 100) / 100;
-    const bl = bg.blur || 0;
-    const filt = bl > 0 ? `blur(${bl}px)` : 'none';
     document.documentElement.style.setProperty('--bg-opacity', op);
 
     // Размытие «стекла» нужно только поверх картинки/видео; на однотонном фоне оно ничего не меняет, но стоит GPU на каждом кадре hover-анимаций.
-    document.documentElement.classList.toggle('has-bg', (bg.type === 'video' || bg.type === 'image') && !!url);
-    document.documentElement.classList.toggle('has-video', bg.type === 'video' && !!url);
-    // кэш для мгновенного старта (читает scripts/pre.js)
-    try {
-        localStorage.setItem('kb-bgc', url ? bg.type : '');
-        localStorage.setItem('kb-th', document.body.dataset.theme || '');
-        localStorage.setItem('kb-css', root.style.cssText);
-    } catch {}
+    document.documentElement.classList.toggle('no-bg', !((bg.type === 'video' || bg.type === 'image') && url));
     if (bg.type === 'video' && url) {
         i.hidden = true; v.hidden = false;
-        v.style.opacity = op; v.style.filter = filt;
+        v.style.opacity = op;
         bgVideoActive = true;
         bgVideoUrl = url;
     } else if (bg.type === 'image' && url) {
         bgVideoActive = false; bgVideoUrl = '';
         releaseVideo(v);
         v.hidden = true; i.hidden = false;
-        i.style.backgroundImage = `url("${url}")`; i.style.opacity = op; i.style.filter = filt;
+        i.style.backgroundImage = `url("${url}")`; i.style.opacity = op;
     } else {
         bgVideoActive = false; bgVideoUrl = '';
         releaseVideo(v);
@@ -758,7 +737,6 @@ function setupVideoVisibility() {
     videoVisibilityBound = true;
 
     const sync = () => {
-        document.documentElement.classList.toggle('kb-paused', !isPageActive());
         syncVideoPlayback();
         syncClockTimers();
     };
@@ -974,23 +952,70 @@ function paintEngine() {
     const inp = searchInput(); if (inp) inp.placeholder = `Поиск в ${ENGINES[engine].name}…`;
 }
 
+const ICO_CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+const ICO_X = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const ICO_FILL = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7L7 17M7 9v8h8"/></svg>';
+const ICO_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>';
+let sugSel = -1;
+
+function agoLabel(id) {
+    const t = Number(id); if (!t || t > Date.now()) return '';
+    const m = Math.floor((Date.now() - t) / 60000);
+    if (m < 1) return 'сейчас';
+    if (m < 60) return m + ' мин';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + ' ч';
+    const d = Math.floor(h / 24);
+    return d < 30 ? d + ' дн' : '';
+}
+
+function svgEl(markup, cls, title) {
+    const s = el('span', { class: cls, title }); s.innerHTML = markup; return s;
+}
+
+function markMatch(text, q) {
+    const i = q ? text.toLowerCase().indexOf(q) : -1;
+    if (i < 0) return text;
+    return [text.slice(0, i), el('mark', {}, text.slice(i, i + q.length)), text.slice(i + q.length)];
+}
+
 function renderSuggest() {
     const box = suggestBox(), ul = suggestList(), inp = searchInput();
     if (!box || !ul || !inp) return;
-    const q = inp.value.trim().toLowerCase();
+    const raw = inp.value.trim(), q = raw.toLowerCase();
     const items = qHistory.filter(h => !q || h.q.toLowerCase().includes(q)).slice(0, 8);
-    ul.innerHTML = '';
-    items.forEach(h => {
-        ul.append(el('li', { onclick: () => { inp.value = h.q; goSearch(); } },
-                     el('span', {}, '🕒'), el('span', { class: 'q' }, h.q),
-                     el('button', { class: 'del', onclick: e => {
-                         e.stopPropagation();
-                         qHistory = qHistory.filter(x => x.id !== h.id);
-                         store.setHistory(qHistory); renderSuggest();
-                     } }, '✕')
-        ));
+    sugSel = -1;
+    const rows = items.map(h => {
+        const ago = agoLabel(h.id);
+        const fill = svgEl(ICO_FILL, '', 'Вставить в поле');
+        fill.addEventListener('click', e => { e.stopPropagation(); inp.value = h.q; inp.focus(); renderSuggest(); });
+        const del = svgEl(ICO_X, 'del', 'Удалить');
+        del.addEventListener('click', e => {
+            e.stopPropagation();
+            qHistory = qHistory.filter(x => x.id !== h.id);
+            store.setHistory(qHistory); renderSuggest();
+        });
+        return el('li', { role: 'option', onclick: () => { inp.value = h.q; goSearch(); } },
+                  svgEl(ICO_CLOCK, 'ico'), el('span', { class: 'q' }, markMatch(h.q, q)),
+                  ago ? el('span', { class: 'ago' }, ago) : null, el('span', { class: 'act' }, fill, del));
     });
-    box.hidden = items.length === 0;
+    // при наборе — первой строкой быстрое действие «Искать …»
+    if (raw && !items.some(h => h.q === raw)) {
+        rows.unshift(el('li', { class: 'go', role: 'option', onclick: goSearch },
+                        svgEl(ICO_SEARCH, 'ico'), el('span', { class: 'q' }, 'Искать «' + raw + '»')));
+    }
+    ul.replaceChildren(...rows);
+    const cnt = $('#sg-count'); if (cnt) cnt.textContent = String(items.length);
+    box.hidden = rows.length === 0;
+}
+
+function moveSuggest(dir) {
+    const box = suggestBox(); if (!box || box.hidden) return false;
+    const lis = [...suggestList().children]; if (!lis.length) return false;
+    sugSel = (sugSel + dir + lis.length) % lis.length;
+    lis.forEach((li, i) => li.classList.toggle('sel', i === sugSel));
+    lis[sugSel].scrollIntoView({ block: 'nearest' });
+    return true;
 }
 
 function hideSuggest() { const b = suggestBox(); if (b) b.hidden = true; }
@@ -1021,7 +1046,15 @@ async function initSearch(preloaded) {
     });
     searchInput()?.addEventListener('input', debounce(renderSuggest, 90));
     searchInput()?.addEventListener('focus', renderSuggest);
-    searchInput()?.addEventListener('keydown', e => { if (e.key === 'Enter') goSearch(); if (e.key === 'Escape') hideSuggest(); });
+    searchInput()?.addEventListener('keydown', e => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (moveSuggest(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault(); return; }
+        if (e.key === 'Enter') {
+            const li = sugSel >= 0 && !suggestBox().hidden ? suggestList().children[sugSel] : null;
+            if (li) { li.click(); return; }
+            goSearch();
+        }
+        if (e.key === 'Escape') hideSuggest();
+    });
     $('#search-go')?.addEventListener('click', goSearch);
     $('#clear-history')?.addEventListener('click', async () => { qHistory = []; await store.setHistory([]); renderSuggest(); });
     document.addEventListener('click', e => { if (!e.target.closest('.search-row')) hideSuggest(); });
@@ -1032,10 +1065,8 @@ let categories = [];
 let scModal = { catId: null, scId: null };
 
 /* Каждое сохранение вызывало отрисовку дважды (saveCats + storage.onChanged в той же вкладке),
-   и все плитки заново проигрывали анимацию появления. Теперь параллельные вызовы
-   склеиваются в один (с повтором, если данные успели измениться), а анимация входа
-   играет только при первой отрисовке. */
-let catsRendering = null, catsDirty = false, catsFirstRender = true;
+   Теперь параллельные вызовы склеиваются в один (с повтором, если данные успели измениться). */
+let catsRendering = null, catsDirty = false;
 function renderCats() {
     if (catsRendering) { catsDirty = true; return catsRendering; }
     catsRendering = (async () => {
@@ -1044,21 +1075,18 @@ function renderCats() {
                 catsDirty = false;
                 categories = await store.getCategories();
                 const wrap = $('#cats'); if (!wrap) return;
-                wrap.classList.toggle('no-enter', !catsFirstRender);
                 wrap.innerHTML = '';
                 const frag = document.createDocumentFragment();
-                categories.forEach((cat, ci) => frag.append(buildCard(cat, ci)));
+                categories.forEach(cat => frag.append(buildCard(cat)));
                 wrap.append(frag);
-                catsFirstRender = false;
             } while (catsDirty);
         } finally { catsRendering = null; }
     })();
     return catsRendering;
 }
 
-function buildCard(cat, ci) {
-    const card = el('div', { class: 'cat-card' });
-    card.style.animationDelay = `${0.42 + ci * 0.07}s`;
+function buildCard(cat) {
+    const card = el('div', { class: 'cat-card', dataset: { id: cat.id } });
 
     let icoNode;
     if (cat.image) {
@@ -1068,7 +1096,7 @@ function buildCard(cat, ci) {
         icoNode = el('span', { class: 'cat-ico' }, cat.icon || '');
     }
 
-    const head = el('div', { class: 'cat-head', draggable: true },
+    const head = el('div', { class: 'cat-head' },
                     icoNode,
                     el('span', { class: 'cat-name' }, cat.name),
                     el('button', { class: 'cat-add', onclick: e => { e.stopPropagation(); openScModal(cat.id, null); } }, '＋')
@@ -1142,28 +1170,21 @@ function buildCard(cat, ci) {
             toast('Эмодзи обновлён: ' + cat.icon);
         }
     });
-    head.addEventListener('dragstart', e => {
-        dragState = { type: 'cat', id: cat.id };
-        e.dataTransfer.setData('text/plain', 'cat');
-        e.dataTransfer.effectAllowed = 'move';
-    });
-    head.addEventListener('dragend', clearDrag);
+    head.addEventListener('pointerdown', e => startCatDrag(e, card, head));
     card.addEventListener('dragover', e => {
-        if (!dragState) return;
+        if (!dragState || dragState.type !== 'chip') return;
         e.preventDefault(); e.dataTransfer.dropEffect = 'move';
         card.classList.add('drag-over');
     });
     card.addEventListener('dragleave', e => { if (!card.contains(e.relatedTarget)) card.classList.remove('drag-over'); });
     card.addEventListener('drop', e => {
-        e.preventDefault(); e.stopPropagation();
-        const dr = dragState; clearDrag();
-        if (!dr) return;
-        if (dr.type === 'chip') {
-            const t = e.target.closest && e.target.closest('.chip');
-            let after = false;
-            if (t) { const r = t.getBoundingClientRect(); after = e.clientX > r.left + r.width / 2; }
-            moveChip(dr.catId, dr.id, cat.id, t && t.dataset.id, after);
-        } else if (dr.type === 'cat' && dr.id !== cat.id) moveCat(dr.id, cat.id);
+        const dr = dragState;
+        if (!dr || dr.type !== 'chip') return;   // перенос категорий обрабатывает контейнер #cats
+        e.preventDefault(); e.stopPropagation(); clearDrag();
+        const t = e.target.closest && e.target.closest('.chip');
+        let after = false;
+        if (t) { const r = t.getBoundingClientRect(); after = e.clientX > r.left + r.width / 2; }
+        moveChip(dr.catId, dr.id, cat.id, t && t.dataset.id, after);
     });
         const chips = el('div', { class: 'chips' });
         (cat.shortcuts || []).forEach((sc, si) => chips.append(buildChip(cat, sc, si)));
@@ -1233,10 +1254,84 @@ function moveChip(from, scId, to, targetId, after) {
     saveCats();
 }
 
-function moveCat(dragId, targetId) {
-    const from = categories.findIndex(c => c.id === dragId), to = categories.findIndex(c => c.id === targetId);
-    if (from === -1 || to === -1) return;
-    const [c] = categories.splice(from, 1); categories.splice(to, 0, c); saveCats();
+/* Перенос категорий: карточки переставляются прямо под курсором (с плавной FLIP-анимацией),
+   а порядок сохраняется один раз при отпускании. */
+function flipReorder(wrap, mutate) {
+    const cards = [...wrap.children];
+    const first = new Map(cards.map(c => [c, c.getBoundingClientRect()]));
+    mutate();
+    for (const c of cards) {
+        const a = first.get(c), b = c.getBoundingClientRect();
+        const dx = a.left - b.left, dy = a.top - b.top;
+        if (dx || dy) c.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: 'none' }],
+                                { duration: 180, easing: 'cubic-bezier(.22,.7,.3,1)' });
+    }
+}
+
+/* Перенос категории: тянем за шапку; под курсором — плейсхолдер, остальные карточки
+   расступаются с FLIP-анимацией, порядок сохраняется один раз при отпускании. */
+function startCatDrag(e, card, head) {
+    if (e.button !== 0 || e.target.closest('.cat-add')) return;
+    const wrap = card.parentElement, sx = e.clientX, sy = e.clientY, pid = e.pointerId;
+    let on = false, ph = null, grab = null, fix = null, lock = 0;
+    try { head.setPointerCapture(pid); } catch {}
+
+    const move = ev => {
+        if (ev.pointerId !== pid) return;
+        const x = ev.clientX, y = ev.clientY;
+        if (!on) {
+            if (Math.hypot(x - sx, y - sy) < 6) return;
+            on = true;
+            const r = card.getBoundingClientRect();
+            grab = { x: sx - r.left, y: sy - r.top };
+            ph = el('div', { class: 'cat-ph' });
+            ph.style.height = r.height + 'px';
+            card.before(ph);
+            card.classList.add('dragging');
+            Object.assign(card.style, { position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px',
+                                        height: r.height + 'px', zIndex: 60, pointerEvents: 'none', margin: 0 });
+            const r2 = card.getBoundingClientRect();           // если у предка есть transform — компенсируем сдвиг
+            fix = { x: r2.left - r.left, y: r2.top - r.top };
+            document.body.classList.add('cat-dragging');
+        }
+        card.style.left = (x - grab.x - fix.x) + 'px';
+        card.style.top = (y - grab.y - fix.y) + 'px';
+        if (y < 70) window.scrollBy(0, -14); else if (y > innerHeight - 70) window.scrollBy(0, 14);
+        if (performance.now() < lock) return;
+        const t = [...wrap.children].find(n => {
+            if (n === card || n === ph) return false;
+            const q = n.getBoundingClientRect();
+            return x >= q.left && x <= q.right && y >= q.top && y <= q.bottom;
+        });
+        if (!t) return;
+        lock = performance.now() + 180;
+        flipReorder(wrap, () => (ph.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING) ? t.after(ph) : t.before(ph));
+    };
+
+    const end = (ev, cancel) => {
+        if (ev.pointerId !== pid) return;
+        head.removeEventListener('pointermove', move);
+        head.removeEventListener('pointerup', up);
+        head.removeEventListener('pointercancel', cancelUp);
+        try { head.releasePointerCapture(pid); } catch {}
+        if (!on) return;
+        document.body.classList.remove('cat-dragging');
+        const from = card.getBoundingClientRect();
+        for (const p of ['position', 'left', 'top', 'width', 'height', 'zIndex', 'pointerEvents', 'margin']) card.style[p] = '';
+        card.classList.remove('dragging');
+        if (cancel) { ph.remove(); return; }
+        ph.replaceWith(card);
+        const to = card.getBoundingClientRect();
+        card.animate([{ transform: `translate(${from.left - to.left}px,${from.top - to.top}px)` }, { transform: 'none' }],
+                     { duration: 160, easing: 'cubic-bezier(.22,.7,.3,1)' });
+        const byId = new Map(categories.map(c => [c.id, c]));
+        const next = [...wrap.children].map(n => byId.get(n.dataset.id)).filter(Boolean);
+        if (next.length === categories.length && next.some((c, i) => c !== categories[i])) { categories = next; saveCats(); }
+    };
+    const up = ev => end(ev, false), cancelUp = ev => end(ev, true);
+    head.addEventListener('pointermove', move);
+    head.addEventListener('pointerup', up);
+    head.addEventListener('pointercancel', cancelUp);
 }
 
 function uploadCategoryImage(catId) {
@@ -1472,13 +1567,13 @@ function syncSettingsUI(s) {
     val('set-bg-type', bg.type || 'none');
     val('set-bg-url', bg.url || '');
     val('set-bg-opacity', bg.opacity ?? 100); txt('set-bg-opacity-val', (bg.opacity ?? 100) + '%');
-    val('set-bg-blur', bg.blur || 0); txt('set-bg-blur-val', (bg.blur || 0) + 'px');
+   
 
     const app = s.appearance || {};
     val('set-panel-opacity', app.panelOpacity ?? d.panelOpacity); txt('set-panel-opacity-val', (app.panelOpacity ?? d.panelOpacity) + '%');
     val('set-card-opacity', app.cardOpacity ?? d.cardOpacity); txt('set-card-opacity-val', (app.cardOpacity ?? d.cardOpacity) + '%');
     setSlider('set-panel-blur', app.panelBlur ?? d.panelBlur, 'set-panel-blur-val', 'px');
-    setSlider('set-card-blur', app.cardBlur ?? d.cardBlur, 'set-card-blur-val', 'px');
+    setSlider('set-history-blur', app.historyBlur ?? d.historyBlur, 'set-history-blur-val', 'px');
 
     const r = app.radius || {};
     setSlider('set-radius-panel', r.panel ?? d.radius.panel, 'set-radius-panel-val', 'px');
@@ -1595,17 +1690,11 @@ function bindSettings() {
         await updateSetting('bg', prev => ({ ...prev, opacity: v }));
         await applyBackground();
     }, 100));
-    on('set-bg-blur', 'input', debounce(async e => {
-        const v = parseInt(e.target.value, 10);
-        txt('set-bg-blur-val', v + 'px');
-        await updateSetting('bg', prev => ({ ...prev, blur: v }));
-        await applyBackground();
-    }, 100));
 
     bindSlider('set-panel-opacity', 'panelOpacity', 'set-panel-opacity-val', '%');
     bindSlider('set-card-opacity', 'cardOpacity', 'set-card-opacity-val', '%');
     bindSlider('set-panel-blur', 'panelBlur', 'set-panel-blur-val', 'px');
-    bindSlider('set-card-blur', 'cardBlur', 'set-card-blur-val', 'px');
+    bindSlider('set-history-blur', 'historyBlur', 'set-history-blur-val', 'px');
     bindSlider('set-radius-panel', 'radius.panel', 'set-radius-panel-val', 'px');
     bindSlider('set-radius-card', 'radius.card', 'set-radius-card-val', 'px');
     bindSlider('set-radius-button', 'radius.button', 'set-radius-button-val', 'px');
@@ -1636,64 +1725,26 @@ function bindSettings() {
         setCustomColor(hex);
     });
 
-    /* ====== ЭКСПОРТ: 3 варианта ====== */
+    /* ====== ЭКСПОРТ: всегда полный профиль (настройки, категории, картинки, история, фон) ====== */
     on('export-btn', 'click', async () => {
         try {
-            const data = await apiStorage.get(['settings', 'categories', 'history']);
-            const media = await exportMedia();
-            const mediaMB = media.reduce((s, m) => s + (m.data?.length || 0), 0) * 0.75 / 1048576;
-            const hasMedia = media.length > 0 && mediaMB > 0.1;
-            const catImagesKB = Math.round(
-                (data.categories || []).reduce((s, c) => s + (c.image?.length || 0), 0) / 1024
-            );
-
-            let includeMedia = false;
-            let includeCatImages = true;
-
-            if (hasMedia || catImagesKB > 0) {
-                const profileKB = Math.round(JSON.stringify({
-                    s: data.settings, c: data.categories, h: data.history
-                }).length / 1024);
-                const mediaHint = hasMedia ? mediaMB.toFixed(1) + ' МБ' : '0 МБ';
-                const catHint = catImagesKB >= 1024 ? (catImagesKB / 1024).toFixed(1) + ' МБ' : catImagesKB + ' КБ';
-
-                const choice = prompt(
-                    '📦 Экспорт профиля\n' +
-                    '─────────────────────────\n' +
-                    `Настройки + категории: ~${profileKB} КБ\n` +
-                    `Картинки категорий: ${catHint}\n` +
-                    `Фон (медиа): ${mediaHint}\n` +
-                    '─────────────────────────\n\n' +
-                    'Введите цифру:\n' +
-                    '1 — компактный (без картинок категорий и фона)\n' +
-                    '2 — всё кроме фона (с картинками категорий)\n' +
-                    '3 — полный (со всем)\n' +
-                    '(пусто или Отмена — выход)',
-                                      '2'
-                );
-
-                if (!choice) return;
-                if (choice === '1') { includeMedia = false; includeCatImages = false; }
-                else if (choice === '2') { includeMedia = false; includeCatImages = true; }
-                else if (choice === '3') { includeMedia = true; includeCatImages = true; }
-                else { toast('Неверный выбор', 'error'); return; }
+            let mediaBytes = 0;
+            for (const key of await mediaKeys().catch(() => [])) mediaBytes += (await mediaGet(key).catch(() => null))?.size || 0;
+            const mediaMB = mediaBytes / 1048576;
+            // файл фона в base64 раздувается на треть; для очень тяжёлых видео спрашиваем
+            let includeMedia = true;
+            if (mediaMB > 30) {
+                includeMedia = confirm(`Фоновый файл весит ~${mediaMB.toFixed(0)} МБ, экспорт получится очень большим.\n\nОК — экспортировать вместе с фоном\nОтмена — без файла фона (всё остальное сохранится)`);
             }
-
-            const json = await store.exportAll({ includeMedia, includeCatImages });
+            const json = await store.exportAll({ includeMedia });
             const blob = new Blob([json], { type: 'application/json' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-
-            let suffix = 'light';
-            if (includeMedia && includeCatImages) suffix = 'full';
-            else if (includeCatImages) suffix = 'no-bg';
-            a.download = `koch-brauzer-${suffix}.json`;
+            a.download = `koch-brauzer-${includeMedia ? 'full' : 'no-bg'}-${new Date().toISOString().slice(0, 10)}.json`;
             a.click();
             setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-
-            const sizeKB = Math.round(blob.size / 1024);
-            const sizeStr = sizeKB >= 1024 ? (sizeKB / 1024).toFixed(1) + ' МБ' : sizeKB + ' КБ';
-            toast(`Экспортировано (${sizeStr})`);
+            const kb = Math.round(blob.size / 1024);
+            toast(`Экспортировано (${kb >= 1024 ? (kb / 1024).toFixed(1) + ' МБ' : kb + ' КБ'})`);
         } catch (err) {
             console.error('[KOCH] export:', err);
             toast('Ошибка экспорта: ' + err.message, 'error');
@@ -1781,11 +1832,14 @@ async function boot() {
         bindAddCat(); bindScModal(); bindSettings(); bindKeys();
 
         let lastCities = JSON.stringify(s.cities || []);
+        let lastBg = JSON.stringify(s.bg || {});
         const sync = debounce(async next => {
             if (!next) return;
             await applyTheme(next.theme, false);
             applyAppearance(next.appearance);
-            await applyBackground(next);
+            // фон перечитывается (IndexedDB, видео) только если он действительно изменился
+            const bgNow = JSON.stringify(next.bg || {});
+            if (bgNow !== lastBg) { lastBg = bgNow; await applyBackground(next); }
             paintTitle(next);
             if (sub) sub.textContent = next.subtitle || '';
             paintAvatar(next.avatar || '');
@@ -1796,11 +1850,9 @@ async function boot() {
         store.onSettingsChange(sync);
         store.onCategoriesChange(renderCats);
 
-        document.documentElement.classList.remove('kb-pre');
         console.info(`[KOCH] Загружено за ${Math.round(performance.now() - start)}ms`);
     } catch (err) {
         console.error('[KOCH] Boot error:', err);
-        document.documentElement.classList.remove('kb-pre');
         toast('Ошибка инициализации', 'error');
     }
 }
