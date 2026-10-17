@@ -1042,7 +1042,10 @@ function agoLabel(id) {
 }
 
 function svgEl(markup, cls, title) {
-    const s = el('span', { class: cls, title }); s.innerHTML = markup; return s;
+    const s = el('span', { class: cls, title });
+    const doc = new DOMParser().parseFromString(markup.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"'), 'image/svg+xml');
+    if (doc.documentElement && doc.documentElement.localName === 'svg') s.appendChild(document.importNode(doc.documentElement, true));
+    return s;
 }
 
 function markMatch(text, q) {
