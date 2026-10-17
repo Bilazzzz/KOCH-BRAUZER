@@ -1,4 +1,4 @@
-/* ============ KOCH BRAUZER v3.5 — дефолт размытия 10/5 + схема v4 ============ */
+/* ============ KOCH BRAUZER ============ */
 
 /* ---------- 1. Browser API ---------- */
 const api = typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null);
@@ -81,8 +81,7 @@ const debounce = (fn, ms = 250) => {
 };
 
 function toast(msg, type = 'info') {
-    let box = document.getElementById('toasts');
-    if (!box) { box = el('div', { id: 'toasts' }); document.body.append(box); }
+    const box = document.getElementById('toasts');
     const t = el('div', { class: type === 'error' ? 'toast toast-error' : 'toast' }, msg);
     box.append(t);
     setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, 2600);
@@ -100,15 +99,14 @@ function normalizeUrl(str) {
     if (!str) return '';
     if (/^https?:\/\//i.test(str)) return str;
     if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?([\/?#]|$)/i.test(str)) return 'http://' + str;
-        if (str.includes('.') && !str.includes(' ')) return 'https://' + str;
-            return '';
+    // домен вида name.tld: зона обязана начинаться с буквы (поддерживаются и IDN, например .рф)
+    if (!/\s/.test(str) && /^[^\s\/?#]+\.\p{L}[\p{L}\d-]*(?::\d+)?(?:[\/?#]|$)/u.test(str)) return 'https://' + str;
+    return '';
 }
 
 /* ---------- 3. Цвет: HEX <-> HSL ---------- */
 function hexToRgb(hex) {
-    hex = String(hex).replace('#', '');
-    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
-    const n = parseInt(hex, 16);
+    const n = parseInt(String(hex).replace('#', ''), 16);   // сюда всегда приходит полный #rrggbb
     return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
 
@@ -162,7 +160,7 @@ const DEFAULT_SETTINGS = {
     bg: { type: 'none', url: '', idb: '', opacity: 100 },
     appearance: {
         panelOpacity: 30, cardOpacity: 45,
-        panelBlur: 10, historyBlur: 12, historyOpacity: 80, settingsOpacity: 88, settingsBlur: 14,
+        panelBlur: 5, historyBlur: 5, historyOpacity: 45, settingsOpacity: 45, settingsBlur: 5,
         radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10 },
         font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1, letterSpacing: 0, titleSpacing: 0.14, subtitleSpacing: 0.12 },
         animations: true, transitionSpeed: 0.28
@@ -193,7 +191,7 @@ const DEFAULT_CATEGORIES = [
 ]}
 ];
 
-const CURRENT_SCHEMA = 6;
+const CURRENT_SCHEMA = 7;
 const PROFILE_FORMAT_VERSION = 3;
 const MEDIA_KEY = 'bg-media';
 let settingsCache = null;
@@ -269,6 +267,15 @@ function migrateSettings(s, ver) {
         if ((oldApp.panelBlur ?? 0) === 0) m.appearance.panelBlur = DEFAULT_SETTINGS.appearance.panelBlur;
     }
     if (ver < 5 && m.appearance.font.lineHeight === 1.5) m.appearance.font.lineHeight = 1;
+    if (ver < 7) {
+        // прежние дефолты (10/12/80/88/14) заменяются новыми; осознанно изменённые значения не трогаем
+        const a = m.appearance, d = DEFAULT_SETTINGS.appearance;
+        if (a.panelBlur === 10) a.panelBlur = d.panelBlur;
+        if (a.historyBlur === 12) a.historyBlur = d.historyBlur;
+        if (a.historyOpacity === 80) a.historyOpacity = d.historyOpacity;
+        if (a.settingsOpacity === 88) a.settingsOpacity = d.settingsOpacity;
+        if (a.settingsBlur === 14) a.settingsBlur = d.settingsBlur;
+    }
     return m;
 }
 
@@ -454,21 +461,34 @@ async function importMedia(list) {
 
 /* ---------- Store ---------- */
 const store = {
-    async getSettings() {
-        if (settingsCache) return clone(settingsCache);
-        const data = await apiStorage.get(['settings', 'schemaVersion']);
+    sig: '',   // JSON настроек, уже применённых в этой вкладке: свои же записи не применяются повторно
+    async _settingsFrom(data) {
         let s = data.settings;
         const ver = data.schemaVersion || 1;
         if (ver < CURRENT_SCHEMA || !s) {
             s = migrateSettings(s, ver);
-            await this.setSettings(s, false);
-            await apiStorage.set({ schemaVersion: CURRENT_SCHEMA });
+            await apiStorage.set({ settings: s, schemaVersion: CURRENT_SCHEMA });
         }
         s = normalizeSettings(s);   // отбрасывает устаревшие ключи (например, старые blur фона/карточек)
         settingsCache = s;
         return clone(s);
     },
-    async setSettings(s, inv = true) { if (inv) settingsCache = null; await apiStorage.set({ settings: s }); },
+    async getSettings() {
+        if (settingsCache) return clone(settingsCache);
+        return this._settingsFrom(await apiStorage.get(['settings', 'schemaVersion']));
+    },
+    /* Единственное обращение к хранилищу при запуске: настройки + категории + история */
+    async boot() {
+        const d = await apiStorage.get(['settings', 'schemaVersion', 'categories', 'history']);
+        const settings = await this._settingsFrom(d);
+        this.sig = JSON.stringify(settings);
+        return {
+            settings,
+            categories: Array.isArray(d.categories) ? d.categories : clone(DEFAULT_CATEGORIES),
+            history: Array.isArray(d.history) ? d.history : []
+        };
+    },
+    async setSettings(s, inv = true) { if (inv) settingsCache = null; this.sig = JSON.stringify(s); await apiStorage.set({ settings: s }); },
     _q: Promise.resolve(),
     updateSettings(fn) {
         const run = this._q.then(async () => {
@@ -494,7 +514,13 @@ const store = {
             if (area === 'local' && changes.categories) cb(changes.categories.newValue);
         });
     },
-    async reset() { settingsCache = null; await apiStorage.clear(); },
+    async reset() {
+        settingsCache = null;
+        await apiStorage.clear();
+        // файл фона в IndexedDB и кэш погоды раньше после сброса оставались навсегда
+        try { for (const k of await mediaKeys()) await mediaDel(k); } catch (err) { console.warn('[KOCH] reset media:', err); }
+        try { localStorage.removeItem('koch_wx'); } catch {}
+    },
 
     async exportAll(opts = {}) {
         const { includeMedia = true } = opts;
@@ -553,7 +579,7 @@ const THEMES = {
     custom: 'Своя'
 };
 
-let appliedTheme = null, applying = false, bgObjectUrl = null;
+let appliedTheme = null, bgObjectUrl = null;
 
 function applyCustomThemeVars(hex) {
     const clean = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '#ff4fa3';
@@ -598,21 +624,17 @@ function clearCustomThemeVars() {
 }
 
 async function applyTheme(id, persist = true) {
-    if (applying) return;
-    applying = true;
-    try {
-        if (!THEMES[id]) id = 'rose';
-        if (id === appliedTheme && !persist) { applying = false; return; }
-        appliedTheme = id;
-        document.body.dataset.theme = id;
-        if (id === 'custom') {
-            const s = await store.getSettings();
-            applyCustomThemeVars(s.customColor || '#ff4fa3');
-        } else {
-            clearCustomThemeVars();
-        }
-        if (persist) await store.updateSettings(s => ({ ...s, theme: id }));
-    } finally { applying = false; }
+    if (!THEMES[id]) id = 'rose';
+    if (id === appliedTheme && !persist) return;
+    appliedTheme = id;
+    document.body.dataset.theme = id;
+    if (id === 'custom') {
+        const s = await store.getSettings();
+        if (appliedTheme === id) applyCustomThemeVars(s.customColor || '#ff4fa3');   // за время await тему могли сменить
+    } else {
+        clearCustomThemeVars();
+    }
+    if (persist) await store.updateSettings(s => ({ ...s, theme: id }));
 }
 
 function applyAppearance(app) {
@@ -659,6 +681,7 @@ let bgChain = Promise.resolve();
 let bgMediaSig = '';
 let bgVideoActive = false;
 let bgVideoUrl = '';
+let bgAppliedSig = '';   // JSON применённого фона: по нему sync решает, нужно ли перечитывать медиа
 let pageGone = false;
 
 /* Страница «живая», только если вкладка видима и окно не свёрнуто. */
@@ -666,7 +689,7 @@ const isPageActive = () => !document.hidden && !pageGone;
 
 function applyBackground(preloaded) {
     const run = bgChain.then(() => applyBackgroundNow(preloaded));
-    bgChain = run.catch(() => {});
+    bgChain = run.catch(err => console.warn('[KOCH] background:', err));
     return run;
 }
 
@@ -700,6 +723,7 @@ function syncVideoPlayback() {
 async function applyBackgroundNow(preloaded) {
     const s = preloaded || await store.getSettings();
     const bg = s.bg || { type: 'none', url: '', idb: '' };
+    bgAppliedSig = JSON.stringify(bg);
     const v = document.getElementById('bg-video');
     const i = document.getElementById('bg-image');
     if (!v || !i) return;
@@ -810,7 +834,7 @@ async function repairBgMedia(s) {
 /* ---------- 8. Часы и погода ---------- */
 const geoCache = new Map();
 let tickTimer = null, wxTimer = null, clockSlots = [];
-let clockGen = 0, clocksReady = false, lastWxAt = 0;
+let clockGen = 0, clocksReady = false, lastWxAt = 0, clockCitiesSig = '';
 const WX_INTERVAL = 30 * 60 * 1000;
 
 /* fetch с таймаутом и проверкой статуса: раньше зависший запрос или ответ 4xx/5xx
@@ -978,6 +1002,7 @@ async function initClocks(preloaded) {
     const s = preloaded || await store.getSettings();
     if (gen !== clockGen) return;
     const cities = s.cities || ['—', '—'];
+    clockCitiesSig = JSON.stringify(s.cities || []);
     clockSlots = [0, 1].map(i => {
         const city = cities[i] || '—';
         const nameEl = $(i === 0 ? '#city-a' : '#city-b');
@@ -1108,10 +1133,10 @@ async function goSearch() {
     location.href = isUrl ? asUrl : ENGINES[engine].url + encodeURIComponent(raw);
 }
 
-async function initSearch(preloaded) {
+async function initSearch(preloaded, history) {
     const s = preloaded || await store.getSettings();
     engine = ENGINES[s.engine] ? s.engine : 'google';
-    qHistory = await store.getHistory();
+    qHistory = history || await store.getHistory();
     paintEngine();
     $('#engine-btn')?.addEventListener('click', () => {
         const keys = Object.keys(ENGINES);
@@ -1142,13 +1167,15 @@ let scModal = { catId: null, scId: null };
 /* Каждое сохранение вызывало отрисовку дважды (saveCats + storage.onChanged в той же вкладке),
    Теперь параллельные вызовы склеиваются в один (с повтором, если данные успели измениться). */
 let catsRendering = null, catsDirty = false;
-function renderCats() {
+function renderCats(data) {
     if (catsRendering) { catsDirty = true; return catsRendering; }
     catsRendering = (async () => {
         try {
+            let next = Array.isArray(data) ? data : null;
             do {
                 catsDirty = false;
-                categories = await store.getCategories();
+                categories = next || await store.getCategories();
+                next = null;
                 const wrap = $('#cats'); if (!wrap) return;
                 wrap.innerHTML = '';
                 const frag = document.createDocumentFragment();
@@ -1165,7 +1192,7 @@ function buildCard(cat) {
 
     let icoNode;
     if (cat.image) {
-        icoNode = el('img', { class: 'cat-ico cat-ico-img', src: cat.image, alt: '', draggable: false,
+        icoNode = el('img', { class: 'cat-ico cat-ico-img', src: cat.image, alt: '', draggable: 'false',
             onerror: e => e.target.replaceWith(el('span', { class: 'cat-ico' }, cat.icon || '')) });
     } else {
         icoNode = el('span', { class: 'cat-ico' }, cat.icon || '');
@@ -1216,7 +1243,7 @@ function buildCard(cat) {
                 toast('У категории нет эмодзи', 'error');
             }
         } else if (action === '6') {
-            const emojis = ['🌐','','🎮','💻','🛒','','','','🏠','','','💎','🚀','🎯','☕','','🌙','⭐','🎬',''];
+            const emojis = ['🌐','🎵','🎮','💻','🛒','📚','🎨','📰','🏠','📱','🔧','💎','🚀','🎯','☕','📺','🌙','⭐','🎬','🧩'];
             cat.icon = emojis[Math.floor(Math.random() * emojis.length)];
             saveCats();
             toast('Случайный эмодзи: ' + cat.icon);
@@ -1262,7 +1289,7 @@ function buildCard(cat) {
         moveChip(dr.catId, dr.id, cat.id, t && t.dataset.id, after);
     });
         const chips = el('div', { class: 'chips' });
-        (cat.shortcuts || []).forEach((sc, si) => chips.append(buildChip(cat, sc, si)));
+        (cat.shortcuts || []).forEach(sc => chips.append(buildChip(cat, sc)));
         card.append(head, chips);
         return card;
 }
@@ -1273,7 +1300,7 @@ function clearDrag() {
     document.querySelectorAll('.dragging,.drag-over').forEach(n => n.classList.remove('dragging', 'drag-over'));
 }
 
-function buildChip(cat, sc, si) {
+function buildChip(cat, sc) {
     const chip = el('div', { class: 'chip', draggable: true,
         onclick: e => {
             const u = normalizeUrl(sc.url); if (!u) return;
@@ -1281,12 +1308,11 @@ function buildChip(cat, sc, si) {
             else location.href = u;
         },
         onauxclick: e => { if (e.button === 1) { const u = normalizeUrl(sc.url); if (u) window.open(u, '_blank', 'noopener'); } } });
-    chip.style.animationDelay = `${si * 0.05}s`;
     let ico;
     if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:')))
-        ico = el('img', { src: sc.icon, alt: '', draggable: false, decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, ((sc.title || '').trim()[0] || '🌐').toUpperCase())) });
+        ico = el('img', { src: sc.icon, alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, ((sc.title || '').trim()[0] || '🌐').toUpperCase())) });
     else if (sc.icon) ico = el('span', {}, sc.icon);
-    else ico = el('img', { src: faviconOf(sc.url), alt: '', draggable: false, decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, ((sc.title || '').trim()[0] || '🌐').toUpperCase())) });
+    else ico = el('img', { src: faviconOf(sc.url), alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, ((sc.title || '').trim()[0] || '🌐').toUpperCase())) });
     chip.append(
         el('div', { class: 'chip-ico' }, ico),
                 el('div', { class: 'chip-name', title: sc.title }, sc.title)
@@ -1306,7 +1332,7 @@ function buildChip(cat, sc, si) {
 
 async function saveCats() {
     await store.setCategories(categories);
-    renderCats();
+    renderCats(categories);
 }
 
 function moveChip(from, scId, to, targetId, after) {
@@ -1531,7 +1557,7 @@ function bindAddCat() {
     $('#add-cat')?.addEventListener('click', async () => {
         const name = prompt('Название новой категории:');
         if (!name?.trim()) return;
-        const emojis = ['🌐','','','💻','','','🎨','','',''];
+        const emojis = ['🌐','🎵','🎮','💻','🛒','📚','🎨','📰','🏠','🚀'];
         categories.push({
             id: uid(),
                         icon: emojis[Math.floor(Math.random() * emojis.length)],
@@ -1700,6 +1726,7 @@ async function applyEverything() {
     initClocks(s);
     await renderCats();
     currentSettings = s;
+    store.sig = JSON.stringify(s);
     syncSettingsUI(s);
 }
 
@@ -1764,7 +1791,7 @@ function bindSettings() {
     });
     on('set-bg-url', 'change', async e => {
         const u = e.target.value.trim();
-        await updateSetting('bg', prev => ({ ...prev, url: u, idb: '' }));
+        await updateSetting('bg', prev => u ? { ...prev, url: u, idb: '' } : { ...prev, url: '' });
         if (u) mediaDel(MEDIA_KEY).catch(err => console.warn('[KOCH] media del:', err));
         await applyBackground(); toast('Фон обновлён');
     });
@@ -1883,14 +1910,11 @@ window.addEventListener('unhandledrejection', e => console.error('[KOCH] Rejecti
 
 function initThemeSelector(cur) {
     const sel = $('#theme-select'); if (!sel) return;
-    sel.innerHTML = '';
-    Object.keys(THEMES).forEach(id => {
-        const o = document.createElement('option');
-        o.value = id; o.textContent = THEMES[id];
-        if (id === cur) o.selected = true;
-        sel.append(o);
-    });
-    sel.addEventListener('change', () => applyTheme(sel.value, true));
+    if (!sel.options.length) {
+        sel.append(...Object.entries(THEMES).map(([id, name]) => el('option', { value: id }, name)));
+        sel.addEventListener('change', () => applyTheme(sel.value, true));
+    }
+    sel.value = cur;
 }
 
 function bindKeys() {
@@ -1904,37 +1928,41 @@ function bindKeys() {
 async function boot() {
     const start = performance.now();
     try {
-        const s = await store.getSettings();
+        // одно обращение к хранилищу вместо трёх последовательных
+        const { settings: s, categories: cats, history } = await store.boot();
         s.bg = await repairBgMedia(s);
         await applyTheme(s.theme, false);
         applyAppearance(s.appearance);
-        await applyBackground(s);
         paintTitle(s);
         const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
         paintAvatar(s.avatar || '');
         initThemeSelector(s.theme);
 
         setupVideoVisibility();
-
         initClocks(s);
-        await Promise.all([initSearch(s), renderCats()]);
-        bindAddCat(); bindScModal(); bindSettings(); bindKeys();
 
-        let lastCities = JSON.stringify(s.cities || []);
-        let lastBg = JSON.stringify(s.bg || {});
+        // фон (IndexedDB, видео) подгружается параллельно и не задерживает первый показ интерфейса
+        applyBackground(s);
+        const searchReady = initSearch(s, history);
+        bindAddCat(); bindScModal(); bindSettings(); bindKeys();
+        await Promise.all([searchReady, renderCats(cats)]);
+
         const sync = debounce(async next => {
             if (!next) return;
+            // изменение пришло от этой же вкладки и уже применено - повторно не трогаем DOM
+            const sig = JSON.stringify(next);
+            if (sig === store.sig) return;
+            store.sig = sig;
             await applyTheme(next.theme, false);
+            if (next.theme === 'custom') applyCustomThemeVars(next.customColor);   // цвет мог измениться в другой вкладке
             applyAppearance(next.appearance);
             // фон перечитывается (IndexedDB, видео) только если он действительно изменился
-            const bgNow = JSON.stringify(next.bg || {});
-            if (bgNow !== lastBg) { lastBg = bgNow; await applyBackground(next); }
+            if (JSON.stringify(next.bg || {}) !== bgAppliedSig) await applyBackground(next);
             paintTitle(next);
             if (sub) sub.textContent = next.subtitle || '';
             paintAvatar(next.avatar || '');
             const sel = $('#theme-select'); if (sel) sel.value = next.theme || 'rose';
-            const c = JSON.stringify(next.cities || []);
-            if (c !== lastCities) { lastCities = c; initClocks(next); }
+            if (JSON.stringify(next.cities || []) !== clockCitiesSig) initClocks(next);
         }, 120);
         store.onSettingsChange(sync);
         store.onCategoriesChange(renderCats);
@@ -1950,4 +1978,4 @@ boot();
 
 /* Снимаем класс вступительной анимации: освобождает GPU-слои и не даёт анимации
    перезапускаться при перерисовке карточек (drag, правка категорий). */
-setTimeout(() => document.documentElement.classList.remove('intro'), 1500);
+setTimeout(() => document.documentElement.classList.remove('intro'), 800);
