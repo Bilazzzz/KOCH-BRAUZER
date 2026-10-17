@@ -61,29 +61,29 @@ html.no-bg .panel::before{backdrop-filter:none;-webkit-backdrop-filter:none}
 .engine-btn{border-radius:50%;background:color-mix(in srgb,var(--card2) 80%,transparent);border:1px solid var(--border);color:var(--accent2);font-weight:800;font-size:.8rem}
 #search-input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-size:1rem;padding:10px 6px;min-width:0}
 .go-btn{border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 4px 18px var(--glow)}
-.suggest{position:absolute;left:6px;right:6px;top:calc(100% + 10px);z-index:30;background:color-mix(in srgb,color-mix(in srgb,var(--accent) 5%,var(--bg)) var(--sg-op),transparent);backdrop-filter:var(--sg-bf);-webkit-backdrop-filter:var(--sg-bf);border:1px solid var(--border-hi);border-radius:20px;box-shadow:0 14px 32px rgba(0,0,0,.45);overflow:hidden;animation:fadeUp .16s cubic-bezier(.22,.7,.3,1) backwards}
-.suggest::before{content:'';position:absolute;left:0;right:0;top:0;height:2px;background:linear-gradient(90deg,transparent,var(--accent),var(--accent2),transparent);opacity:.8}
-.sg-head{display:flex;align-items:center;gap:8px;padding:14px 16px 8px;font-size:.68rem;letter-spacing:calc(.2em + var(--ls));text-transform:uppercase;font-weight:800;color:var(--muted)}
-.sg-count{min-width:20px;padding:1px 7px;border-radius:999px;text-align:center;letter-spacing:0;font-size:.68rem;color:var(--accent2);background:color-mix(in srgb,var(--accent) 16%,transparent)}
-.sg-clear{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:.72rem;letter-spacing:.02em;text-transform:none;font-weight:600;color:var(--muted);padding:5px 11px;border-radius:999px;transition:color .15s ease,background-color .15s ease}
-.sg-clear svg{width:13px;height:13px}
-.sg-clear:hover{color:#ff8585;background:rgba(255,80,80,.12)}
-#suggest-list{max-height:340px;overflow-y:auto;padding:2px 8px 8px;display:flex;flex-direction:column;gap:2px}
-.suggest li{display:flex;align-items:center;gap:12px;padding:8px 10px;border-radius:14px;cursor:pointer;font-size:.93rem;transition:background-color .15s ease}
-.suggest li:hover,.suggest li.sel{background:color-mix(in srgb,var(--accent) 12%,var(--card2))}
-.suggest li .ico{flex:none;width:32px;height:32px;border-radius:11px;display:grid;place-items:center;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent2);transition:background-color .15s ease,color .15s ease}
-.suggest li:hover .ico,.suggest li.sel .ico{background:var(--accent);color:#fff}
+.suggest{position:absolute;left:6px;right:6px;top:calc(100% + 10px);z-index:30;background:color-mix(in srgb,color-mix(in srgb,var(--accent) 5%,var(--bg)) var(--sg-op),transparent);backdrop-filter:var(--sg-bf);-webkit-backdrop-filter:var(--sg-bf);border:1px solid var(--border);border-radius:18px;box-shadow:0 12px 32px rgba(0,0,0,.38);overflow:hidden;animation:fadeUp .16s cubic-bezier(.22,.7,.3,1) backwards}
+.sg-head{display:flex;align-items:center;justify-content:space-between;padding:12px 18px 6px;font-size:.66rem;letter-spacing:calc(.18em + var(--ls));text-transform:uppercase;font-weight:700;color:var(--muted)}
+.sg-clear{display:inline-flex;align-items:center;gap:5px;font-size:.72rem;letter-spacing:.02em;text-transform:none;font-weight:600;color:var(--muted);padding:4px 9px;border-radius:8px;transition:color .15s ease,background-color .15s ease}
+.sg-clear svg{width:12px;height:12px}
+.sg-clear:hover{color:#ff7b7b;background:rgba(255,80,80,.1)}
+#suggest-list{max-height:320px;overflow-y:auto;padding:2px 6px 8px;display:flex;flex-direction:column;gap:1px}
+.suggest li{position:relative;display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:12px;cursor:pointer;font-size:.92rem;transition:background-color .12s ease}
+.suggest li:hover,.suggest li.sel{background:color-mix(in srgb,var(--text) 6%,transparent)}
+.suggest li.sel::before{content:'';position:absolute;left:0;top:10px;bottom:10px;width:2px;border-radius:2px;background:var(--accent)}
+.suggest li .ico{flex:none;display:grid;place-items:center;color:var(--muted);transition:color .12s ease}
 .suggest li .ico svg{width:15px;height:15px}
+.suggest li:hover .ico,.suggest li.sel .ico,.suggest li.go .ico{color:var(--accent2)}
 .suggest li .q{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.suggest li .q mark{background:none;color:var(--accent2);font-weight:700}
+.suggest li .q mark{background:none;color:var(--accent2);font-weight:600}
 .suggest li.go .q{color:var(--accent2);font-weight:600}
-.suggest li .ago{flex:none;font-size:.7rem;color:var(--muted);padding:2px 8px;border-radius:999px;background:color-mix(in srgb,var(--text) 6%,transparent)}
+.suggest li.go::after{content:'\21B5';flex:none;font-size:.85rem;color:var(--muted)}
+.suggest li .ago{flex:none;font-size:.7rem;color:var(--muted);opacity:.8}
 .suggest li .act{flex:none;display:none;gap:2px}
 .suggest li:hover .act,.suggest li.sel .act{display:flex}
 .suggest li:hover .ago,.suggest li.sel .ago{display:none}
-.suggest li .act span{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;color:var(--muted);transition:color .15s ease,background-color .15s ease}
-.suggest li .act span:hover{color:var(--accent2);background:color-mix(in srgb,var(--accent) 16%,transparent)}
-.suggest li .act .del:hover{color:#ff6b6b;background:rgba(255,80,80,.14)}
+.suggest li .act span{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--muted);transition:color .12s ease,background-color .12s ease}
+.suggest li .act span:hover{color:var(--accent2);background:color-mix(in srgb,var(--text) 8%,transparent)}
+.suggest li .act .del:hover{color:#ff7b7b;background:rgba(255,80,80,.12)}
 .cats{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
 .cat-card{background:color-mix(in srgb,var(--card) 90%,transparent);border:1px solid var(--border);border-radius:var(--r-md);padding:14px;display:flex;flex-direction:column;align-items:stretch}
 .cat-card.drag-over{border-color:var(--accent);border-style:dashed;background:var(--card2)}
@@ -319,6 +319,10 @@ html{scrollbar-gutter:stable}
 .settings-modal .hint{margin-top:-4px}
 .panel{border-color:color-mix(in srgb,var(--border-hi) 65%,transparent)}
 .panel::before{background-image:linear-gradient(180deg,rgba(255,255,255,.045),transparent 180px)}
+/* polish round 4: статично, без нагрузки на GPU/CPU */
+:root{color-scheme:dark}
+body[data-theme="light"]{color-scheme:light}
+.clock-time{margin:5px 0 9px}
 </style>
 </head>
 <body data-theme="rose">
@@ -372,7 +376,7 @@ html{scrollbar-gutter:stable}
         </button>
       </div>
       <div id="suggest" class="suggest" hidden>
-        <div class="sg-head"><span>Недавние запросы</span><span id="sg-count" class="sg-count">0</span><button id="clear-history" class="sg-clear" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3"/></svg>Очистить</button></div>
+        <div class="sg-head"><span>Недавние запросы</span><button id="clear-history" class="sg-clear" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3"/></svg>Очистить</button></div>
         <ul id="suggest-list" role="listbox"></ul>
       </div>
     </section>
@@ -422,7 +426,7 @@ html{scrollbar-gutter:stable}
         <div class="grp">Фон</div>
         <label class="fld">Тип фона
           <select id="set-bg-type">
-            <option value="none">Неон (по умолчанию)</option>
+            <option value="none">Цвета темы (по умолчанию)</option>
             <option value="video">Видео (зацикленное)</option>
             <option value="image">Изображение</option>
           </select>

@@ -406,13 +406,12 @@ function blobToBase64(blob) {
     });
 }
 
-function base64ToBlob(dataUrl, mime) {
-    const parts = dataUrl.split(',');
-    if (parts.length < 2) throw new Error('Invalid data URL');
-    const bytes = atob(parts[1]);
-    const arr = new Uint8Array(bytes.length);
-    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-    return new Blob([arr], { type: mime || 'application/octet-stream' });
+/* Декодирование средствами браузера (fetch data:-URL) вместо atob + цикла по байтам:
+   для крупного видеофона это убирает копии файла в виде строки и Uint8Array (пик RAM при импорте). */
+async function base64ToBlob(dataUrl, mime) {
+    if (typeof dataUrl !== 'string' || !dataUrl.includes(',')) throw new Error('Invalid data URL');
+    const blob = await (await fetch(dataUrl)).blob();
+    return blob.slice(0, blob.size, mime || 'application/octet-stream');
 }
 
 async function compressImageBlob(blob, maxWidth = 1920) {
@@ -454,7 +453,7 @@ async function importMedia(list) {
     if (!Array.isArray(list)) return;
     for (const m of list) {
         if (!m || !m.id || !m.data) continue;
-        try { await mediaPut(m.id, base64ToBlob(m.data, m.mime)); }
+        try { await mediaPut(m.id, await base64ToBlob(m.data, m.mime)); }
         catch (err) { console.warn('[KOCH] importMedia:', m.id, err); }
     }
 }
@@ -1066,10 +1065,18 @@ function agoLabel(id) {
     return d < 30 ? d + ' дн' : '';
 }
 
+/* Разметка иконки разбирается один раз, дальше клонируется: раньше каждая строка подсказок
+   на каждое нажатие клавиши запускала DOMParser заново (до ~25 разборов на ввод). */
+const svgProto = new Map();
 function svgEl(markup, cls, title) {
     const s = el('span', { class: cls, title });
-    const doc = new DOMParser().parseFromString(markup.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"'), 'image/svg+xml');
-    if (doc.documentElement && doc.documentElement.localName === 'svg') s.appendChild(document.importNode(doc.documentElement, true));
+    let proto = svgProto.get(markup);
+    if (proto === undefined) {
+        const doc = new DOMParser().parseFromString(markup.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"'), 'image/svg+xml');
+        proto = doc.documentElement && doc.documentElement.localName === 'svg' ? document.importNode(doc.documentElement, true) : null;
+        svgProto.set(markup, proto);
+    }
+    if (proto) s.appendChild(proto.cloneNode(true));
     return s;
 }
 
@@ -1105,7 +1112,6 @@ function renderSuggest() {
                         svgEl(ICO_SEARCH, 'ico'), el('span', { class: 'q' }, 'Искать «' + raw + '»')));
     }
     ul.replaceChildren(...rows);
-    const cnt = $('#sg-count'); if (cnt) cnt.textContent = String(items.length);
     box.hidden = rows.length === 0;
 }
 
@@ -1164,27 +1170,35 @@ async function initSearch(preloaded, history) {
 let categories = [];
 let scModal = { catId: null, scId: null };
 
-/* Каждое сохранение вызывало отрисовку дважды (saveCats + storage.onChanged в той же вкладке),
-   Теперь параллельные вызовы склеиваются в один (с повтором, если данные успели измениться). */
-let catsRendering = null, catsDirty = false;
+/* Каждое сохранение вызывало отрисовку дважды (saveCats + storage.onChanged в той же вкладке).
+   Параллельные вызовы склеиваются в один (с повтором, если данные успели измениться), а данные,
+   которые уже на экране (catsSig), повторно не рисуются.
+   Флаг catsBusy отдельный от промиса: при синхронном проходе (данные переданы, await не нужен)
+   finally выполнялся ДО присвоения промиса, и «зависший» промис блокировал все последующие отрисовки. */
+let catsBusy = false, catsDirty = false, catsRun = Promise.resolve(), catsSig = '';
 function renderCats(data) {
-    if (catsRendering) { catsDirty = true; return catsRendering; }
-    catsRendering = (async () => {
+    const sig = Array.isArray(data) ? JSON.stringify(data) : null;
+    if (catsBusy) { if (sig === null || sig !== catsSig) catsDirty = true; return catsRun; }
+    if (sig !== null && sig === catsSig) return catsRun;
+    catsBusy = true;
+    catsRun = (async () => {
         try {
-            let next = Array.isArray(data) ? data : null;
+            let next = sig !== null ? data : null;
             do {
                 catsDirty = false;
+                const given = next !== null;
                 categories = next || await store.getCategories();
                 next = null;
+                catsSig = given ? sig : JSON.stringify(categories);
                 const wrap = $('#cats'); if (!wrap) return;
                 wrap.innerHTML = '';
                 const frag = document.createDocumentFragment();
                 categories.forEach(cat => frag.append(buildCard(cat)));
                 wrap.append(frag);
             } while (catsDirty);
-        } finally { catsRendering = null; }
+        } finally { catsBusy = false; }
     })();
-    return catsRendering;
+    return catsRun;
 }
 
 function buildCard(cat) {
