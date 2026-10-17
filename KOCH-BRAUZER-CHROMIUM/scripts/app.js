@@ -161,10 +161,10 @@ const DEFAULT_SETTINGS = {
     bg: { type: 'none', url: '', idb: '', opacity: 100 },
     appearance: {
         panelOpacity: 30, cardOpacity: 45,
-        panelBlur: 10, historyBlur: 12,
+        panelBlur: 10, historyBlur: 12, historyOpacity: 80, settingsOpacity: 88, settingsBlur: 14,
         radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10 },
         font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1, letterSpacing: 0, titleSpacing: 0.14, subtitleSpacing: 0.12 },
-        animations: true, transitionSpeed: 0.28
+        animations: true, transitionSpeed: 0.28, fpsLimit: 0
     }
 };
 
@@ -196,6 +196,10 @@ const CURRENT_SCHEMA = 6;
 const PROFILE_FORMAT_VERSION = 3;
 const MEDIA_KEY = 'bg-media';
 let settingsCache = null;
+/* Текущий лимит FPS анимаций (0 = Авто) и easing для Web Animations API */
+var animFps = 0;
+function animEase(sec) { return animFps > 0 ? `steps(${Math.max(1, Math.round(sec * animFps))},jump-end)` : 'cubic-bezier(.22,.7,.3,1)'; }
+function animDur(ms) { return document.documentElement.classList.contains('reduce-motion') ? 0 : ms; }
 
 /* ---------- 5. Нормализация и миграция ---------- */
 function normalizeBg(bg) {
@@ -208,6 +212,9 @@ function normalizeBg(bg) {
     };
 }
 
+/* 0 = «Авто» (частота монитора); иначе 15…240 */
+function normFps(v) { return v > 0 && v < 15 ? 15 : v; }
+
 function normalizeAppearance(app) {
     app = app && typeof app === 'object' ? app : {};
     const d = DEFAULT_SETTINGS.appearance;
@@ -218,6 +225,9 @@ function normalizeAppearance(app) {
         cardOpacity: num(app.cardOpacity, d.cardOpacity, 0, 100),
         panelBlur: num(app.panelBlur, d.panelBlur, 0, 20),
         historyBlur: num(app.historyBlur, d.historyBlur, 0, 30),
+        historyOpacity: num(app.historyOpacity, d.historyOpacity, 0, 100),
+        settingsOpacity: num(app.settingsOpacity, d.settingsOpacity, 0, 100),
+        settingsBlur: num(app.settingsBlur, d.settingsBlur, 0, 30),
         radius: {
             card: num(r.card, d.radius.card, 0, 50),
             panel: num(r.panel, d.radius.panel, 0, 50),
@@ -235,7 +245,8 @@ function normalizeAppearance(app) {
             subtitleSpacing: num(f.subtitleSpacing, d.font.subtitleSpacing, 0, 0.6)
         },
         animations: typeof app.animations === 'boolean' ? app.animations : true,
-        transitionSpeed: num(app.transitionSpeed, d.transitionSpeed, 0, 2)
+        transitionSpeed: num(app.transitionSpeed, d.transitionSpeed, 0, 2),
+        fpsLimit: normFps(num(app.fpsLimit, d.fpsLimit, 0, 240))
     };
 }
 
@@ -612,6 +623,10 @@ function applyAppearance(app) {
     r.style.setProperty('--panel-bf', pb > 0 ? `blur(${pb}px)` : 'none');
     const hb = app.historyBlur ?? d.historyBlur;
     r.style.setProperty('--sg-bf', hb > 0 ? `blur(${hb}px)` : 'none');
+    r.style.setProperty('--sg-op', (app.historyOpacity ?? d.historyOpacity) + '%');
+    r.style.setProperty('--set-op', (app.settingsOpacity ?? d.settingsOpacity) + '%');
+    const sb = app.settingsBlur ?? d.settingsBlur;
+    r.style.setProperty('--set-bf', sb > 0 ? `blur(${sb}px)` : 'none');
     if (app.radius) {
         r.style.setProperty('--radius-card', (app.radius.card ?? d.radius.card) + 'px');
         r.style.setProperty('--radius-panel', (app.radius.panel ?? d.radius.panel) + 'px');
@@ -629,6 +644,16 @@ function applyAppearance(app) {
         r.style.setProperty('--ls-sub', (app.font.subtitleSpacing ?? d.font.subtitleSpacing) + 'em');
     }
     r.style.setProperty('--transition-speed', (app.transitionSpeed ?? d.transitionSpeed) + 's');
+    // Лимит FPS: CSS-анимации квантуются через steps() — между шагами кадр не меняется и GPU ничего не перерисовывает.
+    // 0 = «Авто»: переменные снимаются, и работают исходные кривые на частоте монитора.
+    const fps = app.fpsLimit ?? d.fpsLimit;
+    animFps = fps;
+    const ez = { '--ez-panel': .45, '--ez-step': .42, '--ez-pop': .22, '--ez-fast': .16, '--ez-toast': .25, '--ez-15': 0.15, '--ez-20': 0.2, '--ez-25': 0.25, '--ez-30': 0.3, '--ez-50': 0.5,
+                 '--ease-main': app.transitionSpeed ?? d.transitionSpeed };
+    for (const k in ez) {
+        if (fps > 0) r.style.setProperty(k, `steps(${Math.max(1, Math.round(ez[k] * fps))},jump-end)`);
+        else r.style.removeProperty(k);
+    }
     r.classList.toggle('reduce-motion', app.animations === false);
 }
 
@@ -711,6 +736,7 @@ async function applyBackgroundNow(preloaded) {
     document.documentElement.classList.toggle('no-bg', !((bg.type === 'video' || bg.type === 'image') && url));
     if (bg.type === 'video' && url) {
         i.hidden = true; v.hidden = false;
+        document.documentElement.classList.remove('img-bg');
         v.style.opacity = op;
         bgVideoActive = true;
         bgVideoUrl = url;
@@ -719,11 +745,14 @@ async function applyBackgroundNow(preloaded) {
         releaseVideo(v);
         v.hidden = true; i.hidden = false;
         i.style.backgroundImage = `url("${url}")`; i.style.opacity = op;
+        document.documentElement.style.setProperty('--bg-img', `url("${url}")`);
+        document.documentElement.classList.add('img-bg');
     } else {
         bgVideoActive = false; bgVideoUrl = '';
         releaseVideo(v);
         v.hidden = true;
         i.hidden = true; i.style.backgroundImage = '';
+        document.documentElement.classList.remove('img-bg');
        
     }
     syncVideoPlayback();
@@ -1048,7 +1077,7 @@ async function initSearch(preloaded) {
     searchInput()?.addEventListener('focus', renderSuggest);
     searchInput()?.addEventListener('keydown', e => {
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (moveSuggest(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault(); return; }
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.isComposing) {
             const li = sugSel >= 0 && !suggestBox().hidden ? suggestList().children[sugSel] : null;
             if (li) { li.click(); return; }
             goSearch();
@@ -1264,7 +1293,7 @@ function flipReorder(wrap, mutate) {
         const a = first.get(c), b = c.getBoundingClientRect();
         const dx = a.left - b.left, dy = a.top - b.top;
         if (dx || dy) c.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: 'none' }],
-                                { duration: 180, easing: 'cubic-bezier(.22,.7,.3,1)' });
+                                { duration: animDur(180), easing: animEase(.18) });
     }
 }
 
@@ -1274,10 +1303,20 @@ function startCatDrag(e, card, head) {
     if (e.button !== 0 || e.target.closest('.cat-add')) return;
     const wrap = card.parentElement, sx = e.clientX, sy = e.clientY, pid = e.pointerId;
     let on = false, ph = null, grab = null, fix = null, lock = 0;
+    let lastMv = 0, tm = 0, pend = null, ended = false;   // троттлинг движения по лимиту FPS
     try { head.setPointerCapture(pid); } catch {}
 
     const move = ev => {
-        if (ev.pointerId !== pid) return;
+        if (ev.pointerId !== pid || ended) return;
+        if (on && animFps > 0) {
+            const now = performance.now(), iv = 1000 / animFps;
+            if (now - lastMv < iv) {
+                pend = ev;
+                if (!tm) tm = setTimeout(() => { tm = 0; if (pend && !ended) move(pend); }, iv - (now - lastMv));
+                return;
+            }
+            lastMv = now;
+        }
         const x = ev.clientX, y = ev.clientY;
         if (!on) {
             if (Math.hypot(x - sx, y - sy) < 6) return;
@@ -1310,6 +1349,7 @@ function startCatDrag(e, card, head) {
 
     const end = (ev, cancel) => {
         if (ev.pointerId !== pid) return;
+        ended = true; clearTimeout(tm); pend = null;
         head.removeEventListener('pointermove', move);
         head.removeEventListener('pointerup', up);
         head.removeEventListener('pointercancel', cancelUp);
@@ -1323,7 +1363,7 @@ function startCatDrag(e, card, head) {
         ph.replaceWith(card);
         const to = card.getBoundingClientRect();
         card.animate([{ transform: `translate(${from.left - to.left}px,${from.top - to.top}px)` }, { transform: 'none' }],
-                     { duration: 160, easing: 'cubic-bezier(.22,.7,.3,1)' });
+                     { duration: animDur(160), easing: animEase(.16) });
         const byId = new Map(categories.map(c => [c.id, c]));
         const next = [...wrap.children].map(n => byId.get(n.dataset.id)).filter(Boolean);
         if (next.length === categories.length && next.some((c, i) => c !== categories[i])) { categories = next; saveCats(); }
@@ -1476,7 +1516,31 @@ function bindAddCat() {
 let currentSettings = null;
 
 const on = (id, ev, fn) => { const e = document.getElementById(id); if (e) e.addEventListener(ev, fn); return e; };
-const val = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+const val = (id, v) => { const e = document.getElementById(id); if (e) { e.value = v; if (e.type === 'range') paintRange(e); } };
+/* Заливка трека слайдера до текущего значения (переменная --p) */
+function paintRange(e) {
+    const mn = +e.min || 0, mx = +e.max || 100;
+    e.style.setProperty('--p', ((e.value - mn) / (mx - mn || 1) * 100) + '%');
+}
+/* Частота монитора: измеряется один раз при открытии настроек (≈40 кадров) */
+let refreshHz = 0, hzProbe = false;
+function fpsLabel(v) { return v > 0 ? v + ' fps' : (refreshHz ? `Авто · ${refreshHz} Гц` : 'Авто'); }
+function measureRefreshRate() {
+    if (refreshHz || hzProbe) return;
+    hzProbe = true;
+    let n = 0, t0 = 0;
+    const step = t => {
+        if (!t0) t0 = t; else n++;
+        if (n < 40) { requestAnimationFrame(step); return; }
+        const hz = n * 1000 / (t - t0);
+        refreshHz = [30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 155, 165, 180, 240, 300, 360]
+            .reduce((a, c) => Math.abs(c - hz) < Math.abs(a - hz) ? c : a);
+        hzProbe = false;
+        const sl = document.getElementById('set-fps-limit');
+        if (sl && +sl.value === 0) txt('set-fps-limit-val', fpsLabel(0));
+    };
+    requestAnimationFrame(step);
+}
 const txt = (id, s) => { const e = document.getElementById(id); if (e) e.textContent = s; };
 
 async function ensureSettings() { if (!currentSettings) currentSettings = await store.getSettings(); }
@@ -1574,6 +1638,9 @@ function syncSettingsUI(s) {
     val('set-card-opacity', app.cardOpacity ?? d.cardOpacity); txt('set-card-opacity-val', (app.cardOpacity ?? d.cardOpacity) + '%');
     setSlider('set-panel-blur', app.panelBlur ?? d.panelBlur, 'set-panel-blur-val', 'px');
     setSlider('set-history-blur', app.historyBlur ?? d.historyBlur, 'set-history-blur-val', 'px');
+    setSlider('set-history-opacity', app.historyOpacity ?? d.historyOpacity, 'set-history-opacity-val', '%');
+    setSlider('set-settings-opacity', app.settingsOpacity ?? d.settingsOpacity, 'set-settings-opacity-val', '%');
+    setSlider('set-settings-blur', app.settingsBlur ?? d.settingsBlur, 'set-settings-blur-val', 'px');
 
     const r = app.radius || {};
     setSlider('set-radius-panel', r.panel ?? d.radius.panel, 'set-radius-panel-val', 'px');
@@ -1595,6 +1662,7 @@ function syncSettingsUI(s) {
     const anim = document.getElementById('set-animations');
     if (anim) anim.checked = app.animations !== false;
     setSlider('set-transition-speed', app.transitionSpeed ?? d.transitionSpeed, 'set-transition-speed-val', 's');
+    { const f = app.fpsLimit ?? d.fpsLimit; val('set-fps-limit', f); txt('set-fps-limit-val', fpsLabel(f)); }
 
     const cc = (s.customColor || '#ff4fa3').toLowerCase();
     val('set-custom-color', cc);
@@ -1695,6 +1763,9 @@ function bindSettings() {
     bindSlider('set-card-opacity', 'cardOpacity', 'set-card-opacity-val', '%');
     bindSlider('set-panel-blur', 'panelBlur', 'set-panel-blur-val', 'px');
     bindSlider('set-history-blur', 'historyBlur', 'set-history-blur-val', 'px');
+    bindSlider('set-history-opacity', 'historyOpacity', 'set-history-opacity-val', '%');
+    bindSlider('set-settings-opacity', 'settingsOpacity', 'set-settings-opacity-val', '%');
+    bindSlider('set-settings-blur', 'settingsBlur', 'set-settings-blur-val', 'px');
     bindSlider('set-radius-panel', 'radius.panel', 'set-radius-panel-val', 'px');
     bindSlider('set-radius-card', 'radius.card', 'set-radius-card-val', 'px');
     bindSlider('set-radius-button', 'radius.button', 'set-radius-button-val', 'px');
@@ -1709,6 +1780,13 @@ function bindSettings() {
     bindSlider('set-ls-sub', 'font.subtitleSpacing', 'set-ls-sub-val', 'em', 0.01);
     on('set-animations', 'change', e => updateAppearanceSetting('animations', e.target.checked));
     bindSlider('set-transition-speed', 'transitionSpeed', 'set-transition-speed-val', 's', 0.01);
+    on('set-fps-limit', 'input', debounce(e => {
+        const v = parseInt(e.target.value, 10);
+        txt('set-fps-limit-val', fpsLabel(v));
+        updateAppearanceSetting('fpsLimit', v);
+    }, 100));
+    // заливка трека для всех слайдеров окна настроек одним делегированным обработчиком
+    document.getElementById('settings-overlay')?.addEventListener('input', e => { if (e.target.type === 'range') paintRange(e.target); });
 
     on('set-custom-color', 'input', debounce(e => {
         const hex = e.target.value;
@@ -1783,6 +1861,7 @@ async function openSettings() {
     syncSettingsUI(currentSettings);
     const ov = document.getElementById('settings-overlay');
     if (ov) ov.hidden = false;
+    measureRefreshRate();
 }
 
 /* ---------- 12. Запуск ---------- */
@@ -1858,3 +1937,7 @@ async function boot() {
 }
 
 boot();
+
+/* Снимаем класс вступительной анимации: освобождает GPU-слои и не даёт анимации
+   перезапускаться при перерисовке карточек (drag, правка категорий). */
+setTimeout(() => document.documentElement.classList.remove('intro'), 1500);
