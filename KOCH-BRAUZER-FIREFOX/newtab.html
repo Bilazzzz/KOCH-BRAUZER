@@ -34,7 +34,7 @@ html{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 .topbar-right{display:flex;gap:10px;align-items:center}
 .pill-btn{width:38px;height:38px;border-radius:999px;display:grid;place-items:center;background:color-mix(in srgb,var(--panel) 88%,transparent);border:1px solid var(--border);color:var(--accent2);transition:transform var(--tr),border-color var(--tr),background-color var(--tr),box-shadow var(--tr),color var(--tr),opacity var(--tr)}
 .pill-btn:hover{border-color:var(--border-hi);transform:translateY(-2px);box-shadow:0 6px 18px var(--glow)}
-.panel{width:min(1180px,94vw);margin:96px auto 60px;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:0 0 0 1px rgba(0,0,0,.2),0 16px 44px rgba(0,0,0,.4);padding:26px 26px 30px;animation:panelIn .45s cubic-bezier(.22,.7,.3,1) backwards;position:relative;isolation:isolate}
+.panel{width:min(1180px,94vw);margin:96px auto 60px;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:0 0 0 1px rgba(0,0,0,.2),0 8px 22px rgba(0,0,0,.34);padding:26px 26px 30px;animation:panelIn .45s cubic-bezier(.22,.7,.3,1) backwards;position:relative;isolation:isolate}
 .panel::before{content:'';position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;background:var(--panel);box-shadow:inset 0 1px 0 rgba(255,255,255,.06);backdrop-filter:var(--panel-bf);-webkit-backdrop-filter:var(--panel-bf)}
 html.no-bg .panel::before{backdrop-filter:none;-webkit-backdrop-filter:none}
 @keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
@@ -90,7 +90,6 @@ html.no-bg .panel::before{backdrop-filter:none;-webkit-backdrop-filter:none}
 .suggest li .act .del:hover{color:#ff6b6b;background:rgba(255,80,80,.14)}
 .cats{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
 .cat-card{background:color-mix(in srgb,var(--card) 90%,transparent);border:1px solid var(--border);border-radius:var(--r-md);padding:14px;transition:transform var(--tr),border-color var(--tr),background-color var(--tr),box-shadow var(--tr),color var(--tr),opacity var(--tr);contain:layout style paint;display:flex;flex-direction:column;align-items:stretch}
-.cat-card:hover{border-color:var(--border-hi)}
 .cat-card.drag-over{border-color:var(--accent);border-style:dashed;background:var(--card2)}
 .cat-card.dragging{box-shadow:0 18px 44px rgba(0,0,0,.45),0 0 0 2px var(--accent);cursor:grabbing}
 .cat-ph{border:1px dashed var(--accent);border-radius:var(--r-md);background:color-mix(in srgb,var(--accent) 8%,transparent)}
@@ -104,7 +103,6 @@ body.cat-dragging,body.cat-dragging *{cursor:grabbing!important;user-select:none
 .cat-add:hover{color:var(--accent);background:var(--card2);transform:scale(1.12)}
 .chips{display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:10px;flex:1;align-content:start}
 .chip{position:relative;width:100%;max-width:120px;justify-self:center;padding:12px 6px 10px;display:flex;flex-direction:column;align-items:center;gap:8px;background:color-mix(in srgb,var(--card2) 72%,transparent);border:1px solid transparent;border-radius:var(--radius-chip);cursor:pointer;transition:transform var(--tr),border-color var(--tr),background-color var(--tr),box-shadow var(--tr),color var(--tr),opacity var(--tr);box-sizing:border-box}
-.chip:hover{transform:translateY(-2px)}
 .chip-ico{width:40px;height:40px;display:grid;place-items:center;font-size:1.35rem;overflow:hidden}
 .chip-ico img{width:100%;height:100%;object-fit:contain;border-radius:8px;display:block}
 .chip-ico span{font-size:1.3rem;line-height:1}
@@ -259,7 +257,7 @@ html.img-bg .panel::after{content:'';position:absolute;inset:0;z-index:-1;border
 /* внешний вид без нагрузки на GPU: только статичные градиенты и тени */
 .cat-card,.clock-card{background-image:linear-gradient(180deg,rgba(255,255,255,.05),transparent 45%);box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
 .cat-head{border-bottom:0;padding-bottom:11px;background:linear-gradient(90deg,transparent,var(--border-hi),transparent) bottom/100% 1px no-repeat}
-.chip-ico{border-radius:12px;background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.chip-ico{border-radius:12px;background:none}
 .chip:hover{background-color:color-mix(in srgb,var(--card2) 88%,var(--accent) 12%)}
 .chip-name{letter-spacing:.01em}
 .subtitle{text-wrap:balance}
@@ -271,10 +269,12 @@ input,select,textarea{caret-color:var(--accent);accent-color:var(--accent)}
 .search-bar:focus-within{transform:none;box-shadow:0 0 0 2px var(--glow),inset 0 1px 0 rgba(255,255,255,.05)}
 .avatar{box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 16%,transparent),0 0 26px var(--glow)}
 .clock-wx{border:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
-.chip-ico img{box-shadow:0 2px 8px rgba(0,0,0,.28)}
 .chip-name{color:color-mix(in srgb,var(--text) 92%,var(--muted))}
 .chip:hover .chip-name{color:var(--text)}
-.add-cat:hover{border-style:solid;background:color-mix(in srgb,var(--accent) 7%,transparent)}
+.add-cat:hover{border-style:dashed;background:transparent}
+.add-cat:focus-visible,.chip:focus-visible{outline:2px dashed var(--accent);outline-offset:3px}
+.cat-card{content-visibility:auto;contain-intrinsic-size:auto 220px}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 /* кнопки поиска: hover без scale/rotate (на дробном масштабе полупрозрачные круглые кнопки дают швы-перекрестие при растеризации) */
 .engine-btn,.go-btn{transition:border-color .15s,background-color .15s,filter .15s}
 .engine-btn:hover{transform:none;border-color:var(--accent);background-color:color-mix(in srgb,var(--card2) 78%,var(--accent) 22%)}
@@ -282,6 +282,52 @@ input,select,textarea{caret-color:var(--accent);accent-color:var(--accent)}
 .go-btn:active{transform:none;filter:brightness(.9)}
 .cat-add:hover{transform:none}
 .engine-btn,.go-btn,.pill-btn,.cat-add{cursor:pointer;user-select:none;-webkit-user-select:none}
+/* visual polish, round 3: cheap transforms only */
+.chip-ico span{font-weight:700;font-size:1.05rem;color:var(--accent)}
+.suggest{overscroll-behavior:contain}
+.settings-modal{overscroll-behavior:contain}
+/* hover: only color changes, no transforms over backdrop-filter (GPU) */
+.chip{transition:transform .15s ease,background-color .12s ease}
+.chip-ico{transition:transform .15s ease}
+@media (hover:hover){.chip{will-change:transform}}
+.chip:hover{transform:translateY(-2px)}
+.chip:active{transform:translateY(0) scale(.98)}
+.chip:hover .chip-ico{transform:scale(1.08)}
+.chip-ico img{background:none;border-radius:10px}
+.cat-card,.clock-card{contain:layout style}
+.chip-name{text-shadow:none}
+.cat-name{background:linear-gradient(90deg,var(--text),color-mix(in srgb,var(--text) 70%,var(--accent)));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+html:has(.dragging) .chip,html:has(.dragging) .cat-card{transition:none;will-change:auto}
+html:has(.dragging) .chip:hover{transform:none}
+html:has(.dragging) .chip:hover .chip-ico{transform:none}
+html{scrollbar-gutter:stable}
+@media (hover:none){.chip:hover,.chip:hover .chip-ico{transform:none}}
+/* final polish: calm category hover (colors only), nicer settings */
+.settings-modal .modal-head{background-image:linear-gradient(90deg,transparent,color-mix(in srgb,var(--accent) 55%,transparent),transparent);background-size:100% 1px;background-position:bottom;background-repeat:no-repeat;border-bottom:0}
+.settings-modal .modal-head h2{color:var(--accent2,var(--text))}
+.settings-modal .fld input[type=text]:focus,.settings-modal .fld input[type=url]:focus,.settings-modal .fld select:focus{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 20%,transparent)}
+.settings-modal .fld input[type=text],.settings-modal .fld input[type=url],.settings-modal .fld select{transition:border-color .15s ease,background-color .15s ease,box-shadow .15s ease}
+.settings-modal .fld input[type=text]:hover,.settings-modal .fld input[type=url]:hover,.settings-modal .fld select:hover{background:color-mix(in srgb,var(--text) 8%,transparent)}
+.settings-modal .fld input[type=file]{transition:border-color .15s ease}
+.settings-modal .fld input[type=file]:hover{border-color:var(--accent)}
+.settings-modal .fld input[type=file]::file-selector-button{margin-right:10px;padding:5px 12px;border:0;border-radius:999px;background:color-mix(in srgb,var(--accent) 22%,transparent);color:var(--text);font-weight:600;cursor:pointer}
+.settings-modal .fld input[type=range]::-webkit-slider-thumb{transition:transform .12s ease}
+.settings-modal .fld input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.15)}
+.settings-modal .btn,.settings-modal .btn-small{transition:background-color .15s ease,border-color .15s ease,color .15s ease}
+.settings-modal .btn:hover,.settings-modal .btn-small:hover{border-color:var(--accent);transform:none}
+/* compact settings + panel polish */
+.settings-modal{width:min(660px,94vw);max-height:90vh}
+.settings-modal .modal-head{padding:11px 20px}
+.settings-modal .modal-body{padding:0 14px 14px}
+.settings-modal .sec{gap:10px 20px;padding:14px 6px}
+.settings-modal .grp{gap:8px;margin-bottom:-2px}
+.settings-modal .row2{gap:10px 20px}
+.settings-modal .fld{gap:5px}
+.settings-modal .fld input[type=text],.settings-modal .fld input[type=url],.settings-modal .fld select{padding:7px 11px}
+.settings-modal .fld:has(input[type=range]){row-gap:4px}
+.settings-modal .hint{margin-top:-4px}
+.panel{border-color:color-mix(in srgb,var(--border-hi) 65%,transparent)}
+.panel::before{background-image:linear-gradient(180deg,rgba(255,255,255,.045),transparent 180px)}
 </style>
 </head>
 <body data-theme="rose">

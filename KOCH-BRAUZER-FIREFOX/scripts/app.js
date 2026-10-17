@@ -99,6 +99,7 @@ function normalizeUrl(str) {
     str = (str || '').trim();
     if (!str) return '';
     if (/^https?:\/\//i.test(str)) return str;
+    if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?([\/?#]|$)/i.test(str)) return 'http://' + str;
         if (str.includes('.') && !str.includes(' ')) return 'https://' + str;
             return '';
 }
@@ -272,20 +273,29 @@ function migrateSettings(s, ver) {
 }
 
 function normalizeCategories(cats) {
+    if (cats && !Array.isArray(cats) && typeof cats === 'object') cats = Object.values(cats);
     if (!Array.isArray(cats)) return [];
+    const str = (...v) => { for (const x of v) if (typeof x === 'string' && x) return x; return ''; };
+    const usedC = new Set(), usedS = new Set();
+    const uniq = (id, set) => { if (!id || set.has(id)) id = uid(); set.add(id); return id; };
     return cats.map(c => {
         if (!c || typeof c !== 'object') return null;
+        const list = [c.shortcuts, c.links, c.items, c.tiles, c.sites, c.bookmarks].find(Array.isArray) || [];
         return {
-            id: typeof c.id === 'string' && c.id ? c.id : uid(),
-                    icon: typeof c.icon === 'string' ? c.icon : '',
-                    image: typeof c.image === 'string' ? c.image : '',
-                    name: typeof c.name === 'string' ? c.name : 'Category',
-                    shortcuts: Array.isArray(c.shortcuts) ? c.shortcuts.map(s => ({
-                        id: typeof s?.id === 'string' && s.id ? s.id : uid(),
-                                                                                  title: typeof s?.title === 'string' ? s.title : '',
-                                                                                  url: typeof s?.url === 'string' ? s.url : '',
-                                                                                  icon: typeof s?.icon === 'string' ? s.icon : ''
-                    })) : []
+            id: uniq(str(c.id), usedC),
+            icon: str(c.icon, c.emoji),
+            image: str(c.image, c.img),
+            name: str(c.name, c.title) || 'Category',
+            shortcuts: list.map(x => {
+                if (typeof x === 'string') x = { url: x, title: x };
+                if (!x || typeof x !== 'object') return null;
+                return {
+                    id: uniq(str(x.id), usedS),
+                    title: str(x.title, x.name, x.label),
+                    url: str(x.url, x.href, x.link),
+                    icon: str(x.icon, x.image, x.favicon)
+                };
+            }).filter(Boolean)
         };
     }).filter(Boolean);
 }
@@ -305,14 +315,14 @@ function migrateBackup(data) {
         const p = data.profile;
         return {
             settings: normalizeSettings(p.settings),
-            categories: normalizeCategories(p.categories),
+            categories: normalizeCategories(p.categories || p.settings?.categories),
             history: normalizeHistory(p.history),
             media: Array.isArray(p.media) ? p.media.filter(m => m && m.id && m.data) : []
         };
     }
     return {
         settings: normalizeSettings(data.settings || data),
-        categories: normalizeCategories(data.categories),
+        categories: normalizeCategories(data.categories || data.data?.categories || data.settings?.categories),
         history: normalizeHistory(data.history),
         media: Array.isArray(data.media) ? data.media.filter(m => m && m.id && m.data) : []
     };
@@ -805,14 +815,21 @@ const WX_INTERVAL = 30 * 60 * 1000;
 
 /* fetch с таймаутом и проверкой статуса: раньше зависший запрос или ответ 4xx/5xx
    молча ломал погоду, а временный сбой сети навсегда кэшировался как «город не найден». */
-async function fetchJson(url, ms = 8000) {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), ms);
-    try {
-        const r = await fetch(url, { signal: ctrl.signal });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return await r.json();
-    } finally { clearTimeout(t); }
+async function fetchJson(url, ms = 8000, tries = 2) {
+    let err;
+    for (let i = 0; i < tries; i++) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), ms);
+        try {
+            const r = await fetch(url, { signal: ctrl.signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return await r.json();
+        } catch (e) {
+            err = e;
+            if (i < tries - 1) await new Promise(res => setTimeout(res, 700));
+        } finally { clearTimeout(t); }
+    }
+    throw err;
 }
 
 /* Постоянный кэш гео и погоды: новая вкладка рисует погоду сразу, сеть нужна только для обновления.
@@ -829,11 +846,11 @@ const wxStore = (() => {
         setWx(k, v) { load().wx[k] = v; save(); }
     };
 })();
-let wxRetryN = 0, wxRetryT = 0;
+let wxRetryN = 0, wxRetryT = 0, wxNeedRetry = false;
 function scheduleWxRetry() {
     clearTimeout(wxRetryT);
-    if (wxRetryN >= 5) return;
-    wxRetryT = setTimeout(() => { if (isPageActive()) refreshWeather(); }, Math.min(5000 * 2 ** wxRetryN++, 120000));
+    if (wxRetryN >= 20) return;
+    wxRetryT = setTimeout(() => { if (isPageActive()) refreshWeather(); }, Math.min(3000 * 2 ** Math.min(wxRetryN++, 5), 60000));
 }
 const wxText = w => `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
 
@@ -911,6 +928,8 @@ async function refreshWeather() {
         const named = s.city && s.city !== '—';
         if (!s.geo) { wxEl.textContent = '—'; if (named) failed = true; return; }
         const key = s.geo.lat + ',' + s.geo.lon;
+        const cached = wxStore.wx(key);
+        if (cached && Date.now() - cached.at < WX_STALE && gen === clockGen) wxEl.textContent = wxText(cached);
         try {
             // один и тот же город в обоих слотах — один запрос вместо двух
             if (!pending.has(key)) pending.set(key, weather(s.geo.lat, s.geo.lon));
@@ -924,6 +943,7 @@ async function refreshWeather() {
         }
     }));
     if (gen !== clockGen) return;
+    wxNeedRetry = failed;
     if (failed) scheduleWxRetry();
     else { wxRetryN = 0; lastWxAt = Date.now(); }
 }
@@ -941,7 +961,7 @@ function startClockTimers() {
     tickTimer = setInterval(tick, 1000);
     if (clocksReady) {
         wxTimer = setInterval(refreshWeather, WX_INTERVAL);
-        if (Date.now() - lastWxAt >= WX_INTERVAL) refreshWeather();
+        if (wxNeedRetry || Date.now() - lastWxAt >= WX_INTERVAL) { wxRetryN = 0; refreshWeather(); }
     }
 }
 
@@ -1261,9 +1281,9 @@ function buildChip(cat, sc, si) {
     chip.style.animationDelay = `${si * 0.05}s`;
     let ico;
     if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:')))
-        ico = el('img', { src: sc.icon, alt: '', draggable: false, decoding: 'async', onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
+        ico = el('img', { src: sc.icon, alt: '', draggable: false, decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, ((sc.title || '').trim()[0] || '🌐').toUpperCase())) });
     else if (sc.icon) ico = el('span', {}, sc.icon);
-    else ico = el('img', { src: faviconOf(sc.url), alt: '', draggable: false, decoding: 'async', onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
+    else ico = el('img', { src: faviconOf(sc.url), alt: '', draggable: false, decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, ((sc.title || '').trim()[0] || '🌐').toUpperCase())) });
     chip.append(
         el('div', { class: 'chip-ico' }, ico),
                 el('div', { class: 'chip-name', title: sc.title }, sc.title)
@@ -1580,13 +1600,17 @@ async function setCustomColor(hex) {
 }
 
 function bindSlider(inputId, path, valueId, suffix, step = 1) {
-    on(inputId, 'input', debounce(e => {
-        const v = step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
-        txt(valueId, v + suffix);
+    const parse = e => step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
+    const save = debounce(v => {
         const parts = path.split('.');
         if (parts.length === 1) updateAppearanceSetting(parts[0], v);
         else updateAppearanceSetting(parts[0], prev => ({ ...prev, [parts[1]]: v }));
-    }, 100));
+    }, 100);
+    on(inputId, 'input', e => {
+        const v = parse(e);
+        txt(valueId, v + suffix);   // подпись обновляется сразу, запись и применение стилей - с задержкой
+        save(v);
+    });
 }
 
 function paintAvatar(url) {
