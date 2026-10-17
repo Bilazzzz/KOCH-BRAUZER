@@ -287,9 +287,10 @@ input,select,textarea{caret-color:var(--accent);accent-color:var(--accent)}
 .suggest{overscroll-behavior:contain}
 .settings-modal{overscroll-behavior:contain}
 /* hover: only color changes, no transforms over backdrop-filter (GPU) */
-.chip{transition:transform .15s ease,background-color .12s ease}
+.chip{transition:transform .15s ease}
 .chip-ico{transition:transform .15s ease}
-@media (hover:hover){.chip{will-change:transform}}
+.chip,.chip-ico,.chip::after,.clock-card,.clock-card::after{transition-timing-function:steps(4,jump-end)}
+@media (hover:hover){.chip{will-change:transform}.clock-card{will-change:transform}.chip::after,.clock-card::after{will-change:opacity}}
 .chip:hover{transform:translateY(-2px)}
 .chip:active{transform:translateY(0) scale(.98)}
 .chip:hover .chip-ico{transform:scale(1.08)}
@@ -298,6 +299,7 @@ input,select,textarea{caret-color:var(--accent);accent-color:var(--accent)}
 .chip-name{text-shadow:none}
 .cat-name{background:linear-gradient(90deg,var(--text),color-mix(in srgb,var(--text) 70%,var(--accent)));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 html:has(.dragging) .chip,html:has(.dragging) .cat-card{transition:none;will-change:auto}
+html:has(.dragging) .chip::after{will-change:auto}
 html:has(.dragging) .chip:hover{transform:none}
 html:has(.dragging) .chip:hover .chip-ico{transform:none}
 html{scrollbar-gutter:stable}
