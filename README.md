@@ -1,43 +1,93 @@
 <div align="center">
 
+<img src="Docs/screenshot.png" width="100%" alt="KOCH BRAUZER — главная страница">
+
+<br><br>
+
 # 🌸 KOCH BRAUZER
 
-**Минималистичная и красивая страница новой вкладки**
-для Firefox, Edge, Chrome и других браузеров
+**Минималистичная и красивая страница новой вкладки**<br>
+Поиск, погода, часы и ярлыки на одном экране — для Firefox, Edge, Chrome, Opera и Brave.
 
 <br>
 
-![Manifest V3](https://img.shields.io/badge/Manifest-V3-ff4fa3?style=for-the-badge)
-![Firefox](https://img.shields.io/badge/Firefox-142%2B-ff8ac2?style=for-the-badge&logo=firefoxbrowser&logoColor=white)
-![Edge](https://img.shields.io/badge/Edge-supported-0078D7?style=for-the-badge&logo=microsoftedge&logoColor=white)
-![Chromium](https://img.shields.io/badge/Chromium-supported-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)
-![Privacy](https://img.shields.io/badge/Data%20collection-none-34d399?style=for-the-badge)
-![MIT License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-ff4fa3?style=for-the-badge)](#-установка)
+[![Firefox](https://img.shields.io/badge/Firefox-142%2B-ff8ac2?style=for-the-badge&logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/)
+[![Edge](https://img.shields.io/badge/Edge-supported-0078D7?style=for-the-badge&logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/koch-brauzer/kmkmnnjonlnhcpdcjfgfhhjepcbakefm)
+[![Chromium](https://img.shields.io/badge/Chromium-supported-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](#-установка)
+[![Privacy](https://img.shields.io/badge/Data%20collection-none-34d399?style=for-the-badge)](#-приватность)
+[![MIT License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](#)
 
 <br>
 
-[**🦊 Firefox**](https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/) &nbsp;•&nbsp;
-[**🌐 Edge**](https://microsoftedge.microsoft.com/addons/detail/koch-brauzer/kmkmnnjonlnhcpdcjfgfhhjepcbakefm) &nbsp;•&nbsp;
+[**🦊 Установить для Firefox**](https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/) &nbsp;•&nbsp;
+[**🌐 Установить для Edge**](https://microsoftedge.microsoft.com/addons/detail/koch-brauzer/kmkmnnjonlnhcpdcjfgfhhjepcbakefm) &nbsp;•&nbsp;
 [**🛡 VirusTotal**](https://www.virustotal.com/gui/file/2a552d002d6f2ea0c8575a360118a13214faa1d12f2ab0ba00c2478ad8d71a93/community)
+
+<br>
+
+[Возможности](#-возможности) · [Скриншоты](#-скриншоты) · [Установка](#-установка) · [Темы](#-темы) · [Производительность](#-производительность) · [Структура](#-структура-проекта) · [Приватность](#-приватность)
 
 </div>
 
 ---
 
+## ✨ Возможности
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🔎 Умный поиск</h3>
+      5 движков: Google, DuckDuckGo, Bing, Яндекс, Brave. История запросов с подсказками и автоопределение URL.
+    </td>
+    <td width="50%" valign="top">
+      <h3>🕐 Часы и погода</h3>
+      Любые города с учётом часовых поясов и эмодзи-погодой. Данные от open-meteo, без API-ключа.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>🗂 Категории и ярлыки</h3>
+      Создание, редактирование и drag &amp; drop категорий и плиток. Иконка: favicon, эмодзи или своя картинка.
+    </td>
+    <td valign="top">
+      <h3>🎨 8 тем</h3>
+      Rose, Purple, Ocean, Green, Dark, Light, Midnight, Sunset. Переключение в один клик.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>🖼 Живой фон</h3>
+      Неоновые орбы по умолчанию, свой видеофон или изображение. Настраиваются прозрачность и размытие.
+    </td>
+    <td valign="top">
+      <h3>🧩 Тонкая настройка</h3>
+      Прозрачность панелей и карточек, скругления 5 элементов, шрифт (семейство, размер, толщина, интервал), скорость анимаций.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>👤 Аватар</h3>
+      Своё изображение (автосжатие до 256 px) или неоновая заглушка.
+    </td>
+    <td valign="top">
+      <h3>💾 Бэкапы</h3>
+      Экспорт и импорт всех настроек одним JSON-файлом.
+    </td>
+  </tr>
+</table>
+
 ## 📸 Скриншоты
 
 <table>
   <tr>
-    <td colspan="2">
-      <img src="Docs/screenshot.png" width="100%" alt="Главная страница">
-    </td>
-  </tr>
-  <tr>
     <td width="50%">
       <img src="Docs/settings.png" width="100%" alt="Настройки">
+      <p align="center"><sub>Настройки · часть 1</sub></p>
     </td>
     <td width="50%">
       <img src="Docs/settings-pt2.png" width="100%" alt="Настройки, часть 2">
+      <p align="center"><sub>Настройки · часть 2</sub></p>
     </td>
   </tr>
 </table>
@@ -45,13 +95,13 @@
 ## 🚀 Установка
 
 | Браузер | Как установить |
-|---|---|
-| 🦊 **Firefox** | [Firefox Add-ons](https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/) |
+|:---|:---|
+| 🦊 **Firefox** 142+ | [Firefox Add-ons](https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/) |
 | 🌐 **Edge** | [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/koch-brauzer/kmkmnnjonlnhcpdcjfgfhhjepcbakefm) |
-| 🧩 **Chrome / Opera / Brave** | вручную, см. ниже |
+| 🧩 **Chrome / Opera / Brave** | вручную из исходников, см. ниже |
 
 <details>
-<summary><b>Ручная установка из исходников</b></summary>
+<summary><b>🛠 Ручная установка из исходников</b></summary>
 
 <br>
 
@@ -68,90 +118,80 @@
 2. Нажми **Загрузить временное дополнение**.
 3. Выбери файл `KOCH-BRAUZER-FIREFOX/manifest.json`.
 
+> Временное дополнение в Firefox сбрасывается после перезапуска браузера. Для постоянной установки используй [Firefox Add-ons](https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/).
+
 </details>
-
-## ✨ Возможности
-
-| | |
-|---|---|
-| 🕐 **Погода** | любые города, учёт часовых поясов, эмодзи-погода (open-meteo) |
-| 🔎 **Умный поиск** | 5 движков (Google, DDG, Bing, Яндекс, Brave), история с подсказками, автоопределение URL |
-| 🗂 **Категории и ярлыки** | создание, редактирование, drag & drop категорий и плиток, favicon / эмодзи / своя иконка |
-| 🎨 **8 тем** | Rose, Purple, Ocean, Green, Dark, Light, Midnight, Sunset |
-| 🧩 **Кастомизация** | прозрачность панелей, карточек и фона, скругления 5 элементов, семейство, размер, толщина и межстрочный интервал шрифта, скорость анимаций |
-| 🖼 **Фон** | неоновые орбы (по умолчанию), видео или изображение, прозрачность и размытие |
-| 👤 **Аватар** | своё изображение (автосжатие до 256px) или неоновая заглушка |
-| 💾 **Бэкапы** | экспорт и импорт всех настроек одним JSON-файлом |
 
 ## 🎨 Темы
 
-![Rose](https://img.shields.io/badge/Rose-ff4fa3?style=flat-square)
-![Purple](https://img.shields.io/badge/Purple-a855f7?style=flat-square)
-![Ocean](https://img.shields.io/badge/Ocean-0ea5e9?style=flat-square)
-![Green](https://img.shields.io/badge/Green-22c55e?style=flat-square)
-![Dark](https://img.shields.io/badge/Dark-1f2937?style=flat-square)
-![Light](https://img.shields.io/badge/Light-e5e7eb?style=flat-square&labelColor=e5e7eb&color=e5e7eb)
-![Midnight](https://img.shields.io/badge/Midnight-1e1b4b?style=flat-square)
-![Sunset](https://img.shields.io/badge/Sunset-f97316?style=flat-square)
+<div align="center">
 
-Переключаются в один клик в шапке. Выбор сохраняется и переживает перезапуск браузера.
+![Rose](https://img.shields.io/badge/Rose-ff4fa3?style=for-the-badge)
+![Purple](https://img.shields.io/badge/Purple-a855f7?style=for-the-badge)
+![Ocean](https://img.shields.io/badge/Ocean-0ea5e9?style=for-the-badge)
+![Green](https://img.shields.io/badge/Green-22c55e?style=for-the-badge)
+![Dark](https://img.shields.io/badge/Dark-1f2937?style=for-the-badge)
+![Light](https://img.shields.io/badge/Light-e5e7eb?style=for-the-badge&labelColor=e5e7eb&color=e5e7eb)
+![Midnight](https://img.shields.io/badge/Midnight-1e1b4b?style=for-the-badge)
+![Sunset](https://img.shields.io/badge/Sunset-f97316?style=for-the-badge)
 
-## ⚡ Почему это быстро
+</div>
 
-- **Один модуль** `scripts/app.js`: никаких гонок между скриптами и лишних запросов.
-- **Одно чтение хранилища на запуск** и кэш настроек в памяти.
+Тема переключается в шапке и сохраняется между запусками браузера.
+
+## ⚡ Производительность
+
+- **Один модуль** `scripts/app.js`: нет гонок между скриптами и лишних запросов.
+- **Одно чтение хранилища на запуск**, настройки кэшируются в памяти.
 - **Часы рисуются мгновенно**, геокодинг и погода догружаются в фоне.
-- **Медиафайлы лежат в IndexedDB** (блобы), а не в base64 внутри настроек: хранилище не раздувается, настройки сохраняются быстро.
-- **Debounced-обработчики** и никаких лишних observers и interval'ов.
+- **Медиа в IndexedDB** (блобы), а не base64 в настройках: хранилище не раздувается.
+- **Видеофон** ставится на паузу и освобождает декодер, когда вкладка скрыта.
+- **Эффекты наведения** строятся на `transform` и `opacity` и облегчены для дисплеев с высокой частотой обновления.
+- **Debounce** в обработчиках, без лишних observers и интервалов.
 
 ## 🗂 Структура проекта
 
 ```text
-koch-brauzer/
-├── Docs/                  # скриншоты для README
-├── KOCH-BRAUZER/
-│   ├── manifest.json      # Manifest V3 (service_worker + scripts для всех браузеров)
-│   ├── background.js      # фоновый скрипт: стартовая вкладка, onInstalled
-│   ├── newtab.html        # разметка и все стили (inline <style>, CSS-переменные)
-│   └── scripts/
-│       └── app.js         # вся логика одним ES-модулем
-└── build.py               # сборка zip-пакетов для магазинов
+KOCH-BRAUZER/
+├── Docs/                      # скриншоты для README
+├── KOCH-BRAUZER-CHROMIUM/     # сборка для Chrome, Edge, Opera, Brave
+│   ├── manifest.json          # MV3, background.service_worker
+│   ├── background.js          # стартовая вкладка, onInstalled
+│   ├── newtab.html            # разметка и стили (CSS-переменные)
+│   └── scripts/app.js         # вся логика одним ES-модулем
+└── KOCH-BRAUZER-FIREFOX/      # сборка для Firefox
+    ├── manifest.json          # MV3, background.scripts
+    └── ...                    # те же newtab.html и scripts/app.js
 ```
 
-## 📦 Сборка пакетов для магазинов
-
-Магазины проверяют манифест строго: Edge и Chrome принимают в MV3 только `background.service_worker`, Firefox только `background.scripts`. Поэтому для публикации пакеты собираются отдельно:
-
-```bash
-python build.py
-```
-
-В папке `dist/` появятся:
-
-- `koch-brauzer-chromium-<версия>.zip` для Edge, Chrome, Opera и Brave;
-- `koch-brauzer-firefox-<версия>.zip` для addons.mozilla.org.
+> Манифесты различаются намеренно: магазины принимают в MV3 для Chromium только `background.service_worker`, для Firefox только `background.scripts`.
 
 ## 🏗 Архитектура
 
-- **Настройки**: `browser.storage.local` с версионной схемой (`schemaVersion`) и миграцией. После обновления старые настройки не теряются, новые поля получают значения по умолчанию (deep-merge).
-- **Медиа**: видео и картинки фона хранятся блобами в **IndexedDB**, в настройках остаётся только ссылка. Нет лимитов на размер файла и мегабайтных base64-строк в storage.
-- **Синхронизация**: `storage.onChanged` мгновенно применяет изменения настроек во всех открытых вкладках.
-- **Совместимость**: основной API `browser.*` (Firefox) с аккуратным фолбэком на `chrome.*` и `localStorage`, поэтому `newtab.html` можно открыть просто в браузере без установки.
-- **Приватность**: `data_collection_permissions.required: ["none"]`. Расширение ничего не собирает, всё хранится только локально.
+| | |
+|:---|:---|
+| **Настройки** | `browser.storage.local` с версионной схемой (`schemaVersion`) и миграцией. После обновления старые настройки сохраняются, новые поля получают значения по умолчанию (deep-merge). |
+| **Медиа** | Видео и картинки фона лежат блобами в **IndexedDB**, в настройках только ссылка. Нет лимитов на размер файла. |
+| **Синхронизация** | `storage.onChanged` мгновенно применяет изменения во всех открытых вкладках. |
+| **Совместимость** | Основной API `browser.*` с фолбэком на `chrome.*` и `localStorage`, поэтому `newtab.html` открывается и просто в браузере без установки. |
 
-### 🔌 Сторонние сервисы
+## 🔒 Приватность
+
+Расширение **ничего не собирает**: `data_collection_permissions.required: ["none"]`. Все настройки хранятся только локально в браузере.
+
+Внешние сервисы:
 
 - [open-meteo.com](https://open-meteo.com): погода и геокодинг городов (без API-ключа и без логов);
 - `google.com/s2/favicons`: иконки ярлыков.
 
 ## 🤝 Контрибьют
 
-Баги и идеи присылай в [Issues](../../issues).
+Нашёл баг или есть идея? Пиши в [Issues](../../issues). Pull request'ы тоже приветствуются.
 
 <div align="center">
 
 ---
 
-Сделано с 💗 &nbsp;|&nbsp; KOCH BRAUZER
+Сделано с 💗 &nbsp;|&nbsp; **KOCH BRAUZER**
 
 </div>
