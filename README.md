@@ -1,9 +1,5 @@
 <div align="center">
 
-<img src="Docs/screenshot.png" width="100%" alt="KOCH BRAUZER — главная страница">
-
-<br><br>
-
 # 🌸 KOCH BRAUZER
 
 **Минималистичная и красивая страница новой вкладки**<br>
@@ -81,13 +77,16 @@
 
 <table>
   <tr>
+    <td colspan="2">
+      <img src="Docs/screenshot.png" width="100%" alt="Главная страница">
+    </td>
+  </tr>
+  <tr>
     <td width="50%">
       <img src="Docs/settings.png" width="100%" alt="Настройки">
-      <p align="center"><sub>Настройки · часть 1</sub></p>
     </td>
     <td width="50%">
       <img src="Docs/settings-pt2.png" width="100%" alt="Настройки, часть 2">
-      <p align="center"><sub>Настройки · часть 2</sub></p>
     </td>
   </tr>
 </table>
