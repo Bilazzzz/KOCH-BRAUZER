@@ -164,7 +164,7 @@ const DEFAULT_SETTINGS = {
         panelBlur: 10, historyBlur: 12, historyOpacity: 80, settingsOpacity: 88, settingsBlur: 14,
         radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10 },
         font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1, letterSpacing: 0, titleSpacing: 0.14, subtitleSpacing: 0.12 },
-        animations: true, transitionSpeed: 0.28, fpsLimit: 0
+        animations: true, transitionSpeed: 0.28
     }
 };
 
@@ -196,9 +196,7 @@ const CURRENT_SCHEMA = 6;
 const PROFILE_FORMAT_VERSION = 3;
 const MEDIA_KEY = 'bg-media';
 let settingsCache = null;
-/* Текущий лимит FPS анимаций (0 = Авто) и easing для Web Animations API */
-var animFps = 0;
-function animEase(sec) { return animFps > 0 ? `steps(${Math.max(1, Math.round(sec * animFps))},jump-end)` : 'cubic-bezier(.22,.7,.3,1)'; }
+const EASE = 'cubic-bezier(.22,.7,.3,1)';
 function animDur(ms) { return document.documentElement.classList.contains('reduce-motion') ? 0 : ms; }
 
 /* ---------- 5. Нормализация и миграция ---------- */
@@ -211,9 +209,6 @@ function normalizeBg(bg) {
         opacity: num(bg.opacity, 100, 0, 100)
     };
 }
-
-/* 0 = «Авто» (частота монитора); иначе 15…240 */
-function normFps(v) { return v > 0 && v < 15 ? 15 : v; }
 
 function normalizeAppearance(app) {
     app = app && typeof app === 'object' ? app : {};
@@ -245,8 +240,7 @@ function normalizeAppearance(app) {
             subtitleSpacing: num(f.subtitleSpacing, d.font.subtitleSpacing, 0, 0.6)
         },
         animations: typeof app.animations === 'boolean' ? app.animations : true,
-        transitionSpeed: num(app.transitionSpeed, d.transitionSpeed, 0, 2),
-        fpsLimit: normFps(num(app.fpsLimit, d.fpsLimit, 0, 240))
+        transitionSpeed: num(app.transitionSpeed, d.transitionSpeed, 0, 2)
     };
 }
 
@@ -644,16 +638,6 @@ function applyAppearance(app) {
         r.style.setProperty('--ls-sub', (app.font.subtitleSpacing ?? d.font.subtitleSpacing) + 'em');
     }
     r.style.setProperty('--transition-speed', (app.transitionSpeed ?? d.transitionSpeed) + 's');
-    // Лимит FPS: CSS-анимации квантуются через steps() — между шагами кадр не меняется и GPU ничего не перерисовывает.
-    // 0 = «Авто»: переменные снимаются, и работают исходные кривые на частоте монитора.
-    const fps = app.fpsLimit ?? d.fpsLimit;
-    animFps = fps;
-    const ez = { '--ez-panel': .45, '--ez-step': .42, '--ez-pop': .22, '--ez-fast': .16, '--ez-toast': .25, '--ez-15': 0.15, '--ez-20': 0.2, '--ez-25': 0.25, '--ez-30': 0.3, '--ez-50': 0.5,
-                 '--ease-main': app.transitionSpeed ?? d.transitionSpeed };
-    for (const k in ez) {
-        if (fps > 0) r.style.setProperty(k, `steps(${Math.max(1, Math.round(ez[k] * fps))},jump-end)`);
-        else r.style.removeProperty(k);
-    }
     r.classList.toggle('reduce-motion', app.animations === false);
 }
 
@@ -831,21 +815,50 @@ async function fetchJson(url, ms = 8000) {
     } finally { clearTimeout(t); }
 }
 
+/* Постоянный кэш гео и погоды: новая вкладка рисует погоду сразу, сеть нужна только для обновления.
+   Раньше при каждой новой вкладке выполнялись 2–4 запроса, и любой сбой оставлял «—» на 30 минут. */
+const WX_FRESH = 15 * 60 * 1000, WX_STALE = 6 * 60 * 60 * 1000;
+const wxStore = (() => {
+    let d = null;
+    const load = () => d || (d = (() => { try { return JSON.parse(localStorage.getItem('koch_wx')) || { geo: {}, wx: {} }; } catch { return { geo: {}, wx: {} }; } })());
+    const save = () => { try { localStorage.setItem('koch_wx', JSON.stringify(d)); } catch {} };
+    return {
+        geo: c => load().geo[c] || null,
+        wx: k => load().wx[k] || null,
+        setGeo(c, v) { load().geo[c] = v; save(); },
+        setWx(k, v) { load().wx[k] = v; save(); }
+    };
+})();
+let wxRetryN = 0, wxRetryT = 0;
+function scheduleWxRetry() {
+    clearTimeout(wxRetryT);
+    if (wxRetryN >= 5) return;
+    wxRetryT = setTimeout(() => { if (isPageActive()) refreshWeather(); }, Math.min(5000 * 2 ** wxRetryN++, 120000));
+}
+const wxText = w => `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
+
 async function geocode(city) {
     if (!city || city === '—') return null;
     if (geoCache.has(city)) return geoCache.get(city);
+    const saved = wxStore.geo(city);
+    if (saved) { geoCache.set(city, saved); return saved; }
     try {
         const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=ru&format=json`);
         const g = d?.results?.[0];
         const info = g ? { lat: g.latitude, lon: g.longitude, tz: g.timezone || null } : null;
         geoCache.set(city, info);
+        if (info) wxStore.setGeo(city, info);
         return info;
     } catch { return null; } // сбой сети не кэшируем: следующая попытка повторит запрос
 }
 
 async function weather(lat, lon) {
+    const key = lat + ',' + lon, c = wxStore.wx(key);
+    if (c && Date.now() - c.at < WX_FRESH) return c;
     const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&timezone=auto`);
-    return { t: Math.round(d.current.temperature_2m), code: d.current.weather_code };
+    const w = { t: Math.round(d.current.temperature_2m), code: d.current.weather_code, at: Date.now() };
+    wxStore.setWx(key, w);
+    return w;
 }
 
 function wxEmoji(code) {
@@ -885,6 +898,7 @@ function tick() {
 async function refreshWeather() {
     const slots = clockSlots, gen = clockGen;
     const pending = new Map();
+    let failed = false;
     await Promise.all(slots.map(async (s, i) => {
         const wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
         if (!wxEl) return;
@@ -894,17 +908,26 @@ async function refreshWeather() {
             if (s.geo) { s.tz = s.geo.tz || null; s.fmt = null; }
         }
         if (gen !== clockGen) return;
-        if (!s.geo) { wxEl.textContent = '—'; return; }
+        const named = s.city && s.city !== '—';
+        if (!s.geo) { wxEl.textContent = '—'; if (named) failed = true; return; }
+        const key = s.geo.lat + ',' + s.geo.lon;
         try {
             // один и тот же город в обоих слотах — один запрос вместо двух
-            const key = s.geo.lat + ',' + s.geo.lon;
             if (!pending.has(key)) pending.set(key, weather(s.geo.lat, s.geo.lon));
             const w = await pending.get(key);
-            if (gen === clockGen) wxEl.textContent = `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
-        } catch { if (gen === clockGen) wxEl.textContent = '—'; }
+            if (gen === clockGen) wxEl.textContent = wxText(w);
+        } catch {
+            failed = true;
+            // при сбое показываем последнюю известную погоду (до 6 ч), а не «—»
+            const c = wxStore.wx(key);
+            if (gen === clockGen) wxEl.textContent = c && Date.now() - c.at < WX_STALE ? wxText(c) : '—';
+        }
     }));
-    if (gen === clockGen) lastWxAt = Date.now();
+    if (gen !== clockGen) return;
+    if (failed) scheduleWxRetry();
+    else { wxRetryN = 0; lastWxAt = Date.now(); }
 }
+window.addEventListener('online', () => { wxRetryN = 0; if (clocksReady && isPageActive()) refreshWeather(); });
 
 function stopClockTimers() {
     if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
@@ -1238,22 +1261,15 @@ function buildChip(cat, sc, si) {
     chip.style.animationDelay = `${si * 0.05}s`;
     let ico;
     if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:')))
-        ico = el('img', { src: sc.icon, alt: '', draggable: false, onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
+        ico = el('img', { src: sc.icon, alt: '', draggable: false, decoding: 'async', onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
     else if (sc.icon) ico = el('span', {}, sc.icon);
-    else ico = el('img', { src: faviconOf(sc.url), alt: '', draggable: false, onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
+    else ico = el('img', { src: faviconOf(sc.url), alt: '', draggable: false, decoding: 'async', onerror: e => e.target.replaceWith(el('span', {}, '🌐')) });
     chip.append(
-        el('div', { class: 'chip-tools' },
-           el('button', { onclick: e => { e.stopPropagation(); openScModal(cat.id, sc.id); } }, '✎'),
-           el('button', { onclick: e => {
-               e.stopPropagation();
-               cat.shortcuts = cat.shortcuts.filter(x => x.id !== sc.id);
-               saveCats(); toast('Ярлык удалён');
-           } }, '✕')
-        ),
         el('div', { class: 'chip-ico' }, ico),
                 el('div', { class: 'chip-name', title: sc.title }, sc.title)
     );
     chip.dataset.id = sc.id;
+    chip.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); openScModal(cat.id, sc.id); });
     chip.addEventListener('dragstart', e => {
         e.stopPropagation();
         dragState = { type: 'chip', catId: cat.id, id: sc.id };
@@ -1293,7 +1309,7 @@ function flipReorder(wrap, mutate) {
         const a = first.get(c), b = c.getBoundingClientRect();
         const dx = a.left - b.left, dy = a.top - b.top;
         if (dx || dy) c.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: 'none' }],
-                                { duration: animDur(180), easing: animEase(.18) });
+                                { duration: animDur(180), easing: EASE });
     }
 }
 
@@ -1303,20 +1319,11 @@ function startCatDrag(e, card, head) {
     if (e.button !== 0 || e.target.closest('.cat-add')) return;
     const wrap = card.parentElement, sx = e.clientX, sy = e.clientY, pid = e.pointerId;
     let on = false, ph = null, grab = null, fix = null, lock = 0;
-    let lastMv = 0, tm = 0, pend = null, ended = false;   // троттлинг движения по лимиту FPS
+    let ended = false;
     try { head.setPointerCapture(pid); } catch {}
 
     const move = ev => {
         if (ev.pointerId !== pid || ended) return;
-        if (on && animFps > 0) {
-            const now = performance.now(), iv = 1000 / animFps;
-            if (now - lastMv < iv) {
-                pend = ev;
-                if (!tm) tm = setTimeout(() => { tm = 0; if (pend && !ended) move(pend); }, iv - (now - lastMv));
-                return;
-            }
-            lastMv = now;
-        }
         const x = ev.clientX, y = ev.clientY;
         if (!on) {
             if (Math.hypot(x - sx, y - sy) < 6) return;
@@ -1349,7 +1356,7 @@ function startCatDrag(e, card, head) {
 
     const end = (ev, cancel) => {
         if (ev.pointerId !== pid) return;
-        ended = true; clearTimeout(tm); pend = null;
+        ended = true;
         head.removeEventListener('pointermove', move);
         head.removeEventListener('pointerup', up);
         head.removeEventListener('pointercancel', cancelUp);
@@ -1363,7 +1370,7 @@ function startCatDrag(e, card, head) {
         ph.replaceWith(card);
         const to = card.getBoundingClientRect();
         card.animate([{ transform: `translate(${from.left - to.left}px,${from.top - to.top}px)` }, { transform: 'none' }],
-                     { duration: animDur(160), easing: animEase(.16) });
+                     { duration: animDur(160), easing: EASE });
         const byId = new Map(categories.map(c => [c.id, c]));
         const next = [...wrap.children].map(n => byId.get(n.dataset.id)).filter(Boolean);
         if (next.length === categories.length && next.some((c, i) => c !== categories[i])) { categories = next; saveCats(); }
@@ -1476,7 +1483,9 @@ function bindScModal() {
     });
     $('#sc-delete')?.addEventListener('click', () => {
         const cat = categories.find(c => c.id === scModal.catId);
-        if (cat) cat.shortcuts = cat.shortcuts.filter(x => x.id !== scModal.scId);
+        const sc = cat?.shortcuts.find(x => x.id === scModal.scId);
+        if (!sc || !confirm(`Удалить ярлык «${sc.title || sc.url}»?`)) return;
+        cat.shortcuts = cat.shortcuts.filter(x => x.id !== scModal.scId);
         closeScModal(); saveCats(); toast('Ярлык удалён');
     });
 
@@ -1521,25 +1530,6 @@ const val = (id, v) => { const e = document.getElementById(id); if (e) { e.value
 function paintRange(e) {
     const mn = +e.min || 0, mx = +e.max || 100;
     e.style.setProperty('--p', ((e.value - mn) / (mx - mn || 1) * 100) + '%');
-}
-/* Частота монитора: измеряется один раз при открытии настроек (≈40 кадров) */
-let refreshHz = 0, hzProbe = false;
-function fpsLabel(v) { return v > 0 ? v + ' fps' : (refreshHz ? `Авто · ${refreshHz} Гц` : 'Авто'); }
-function measureRefreshRate() {
-    if (refreshHz || hzProbe) return;
-    hzProbe = true;
-    let n = 0, t0 = 0;
-    const step = t => {
-        if (!t0) t0 = t; else n++;
-        if (n < 40) { requestAnimationFrame(step); return; }
-        const hz = n * 1000 / (t - t0);
-        refreshHz = [30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 155, 165, 180, 240, 300, 360]
-            .reduce((a, c) => Math.abs(c - hz) < Math.abs(a - hz) ? c : a);
-        hzProbe = false;
-        const sl = document.getElementById('set-fps-limit');
-        if (sl && +sl.value === 0) txt('set-fps-limit-val', fpsLabel(0));
-    };
-    requestAnimationFrame(step);
 }
 const txt = (id, s) => { const e = document.getElementById(id); if (e) e.textContent = s; };
 
@@ -1662,7 +1652,6 @@ function syncSettingsUI(s) {
     const anim = document.getElementById('set-animations');
     if (anim) anim.checked = app.animations !== false;
     setSlider('set-transition-speed', app.transitionSpeed ?? d.transitionSpeed, 'set-transition-speed-val', 's');
-    { const f = app.fpsLimit ?? d.fpsLimit; val('set-fps-limit', f); txt('set-fps-limit-val', fpsLabel(f)); }
 
     const cc = (s.customColor || '#ff4fa3').toLowerCase();
     val('set-custom-color', cc);
@@ -1780,11 +1769,6 @@ function bindSettings() {
     bindSlider('set-ls-sub', 'font.subtitleSpacing', 'set-ls-sub-val', 'em', 0.01);
     on('set-animations', 'change', e => updateAppearanceSetting('animations', e.target.checked));
     bindSlider('set-transition-speed', 'transitionSpeed', 'set-transition-speed-val', 's', 0.01);
-    on('set-fps-limit', 'input', debounce(e => {
-        const v = parseInt(e.target.value, 10);
-        txt('set-fps-limit-val', fpsLabel(v));
-        updateAppearanceSetting('fpsLimit', v);
-    }, 100));
     // заливка трека для всех слайдеров окна настроек одним делегированным обработчиком
     document.getElementById('settings-overlay')?.addEventListener('input', e => { if (e.target.type === 'range') paintRange(e.target); });
 
@@ -1861,7 +1845,6 @@ async function openSettings() {
     syncSettingsUI(currentSettings);
     const ov = document.getElementById('settings-overlay');
     if (ov) ov.hidden = false;
-    measureRefreshRate();
 }
 
 /* ---------- 12. Запуск ---------- */
