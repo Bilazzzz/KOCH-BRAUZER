@@ -92,7 +92,7 @@ html.no-bg .panel::before{backdrop-filter:none;-webkit-backdrop-filter:none}
 body.cat-dragging,body.cat-dragging *{cursor:grabbing!important;user-select:none!important}
 .cat-head{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;margin-bottom:12px;cursor:grab;flex-shrink:0;user-select:none;-webkit-user-select:none;touch-action:none}
 .cat-head:active{cursor:grabbing}
-.cat-ico{font-size:1rem;justify-self:start;min-width:0}
+.cat-ico{font-size:1rem;justify-self:start;flex:none}
 .cat-ico-img{width:22px;height:22px;object-fit:cover;border-radius:6px;vertical-align:middle}
 .cat-name{grid-column:2;text-align:center;font-size:.78rem;font-weight:800;letter-spacing:calc(.22em + var(--ls));text-transform:uppercase;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .cat-add{grid-column:3;justify-self:end;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--muted)}
@@ -157,7 +157,7 @@ body.cat-dragging,body.cat-dragging *{cursor:grabbing!important;user-select:none
 .reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{animation:none!important;transition-duration:.01ms!important}
 .sc-icon-row{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0}
 .sc-icon-preview-row{display:flex;align-items:center;gap:10px;margin:4px 0}
-#sc-icon-preview{width:32px;height:32px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid var(--border)}
+#sc-icon-preview,#cat-img-preview{width:32px;height:32px;object-fit:cover;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid var(--border)}
 #sc-icon-hint{font-size:.75rem;color:var(--muted)}
 .btn-small{padding:6px 12px;font-size:.78rem;font-weight:600;border-radius:var(--r-sm);background:color-mix(in srgb,var(--card2) 80%,transparent);border:1px solid var(--border);color:var(--text);cursor:pointer;transition:transform var(--tr),border-color var(--tr),background-color var(--tr),box-shadow var(--tr),color var(--tr),opacity var(--tr)}
 .btn-small:hover{border-color:var(--border-hi);background:var(--card2)}
@@ -333,7 +333,7 @@ body[data-theme="light"]{color-scheme:light}
   <header class="topbar">
     <span class="brand">KOCH BRAUZER</span>
     <div class="topbar-right">
-      <button id="settings-btn" class="pill-btn" title="Настройки (Ctrl+,)">
+      <button id="settings-btn" class="pill-btn" title="Настройки (Ctrl+,)" aria-label="Настройки">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -367,9 +367,9 @@ body[data-theme="light"]{color-scheme:light}
 
     <section class="search-row">
       <div class="search-bar">
-        <button id="engine-btn" class="engine-btn" title="Сменить поисковик">G</button>
-        <input id="search-input" type="text" placeholder="Поиск…" autocomplete="off" spellcheck="false">
-        <button id="search-go" class="go-btn" title="Найти">
+        <button id="engine-btn" class="engine-btn" title="Сменить поисковик" aria-label="Сменить поисковик">G</button>
+        <input id="search-input" type="text" aria-label="Поиск" placeholder="Поиск…" autocomplete="off" spellcheck="false">
+        <button id="search-go" class="go-btn" title="Найти" aria-label="Найти">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.6" stroke-linecap="round">
             <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
           </svg>
@@ -386,10 +386,10 @@ body[data-theme="light"]{color-scheme:light}
   </main>
 
   <div id="settings-overlay" class="overlay" hidden>
-    <div class="modal settings-modal">
+    <div class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-heading">
       <header class="modal-head">
-        <h2>Настройки</h2>
-        <button class="close-btn" data-close="settings-overlay">✕</button>
+        <h2 id="settings-heading">Настройки</h2>
+        <button class="close-btn" type="button" data-close="settings-overlay" aria-label="Закрыть">✕</button>
       </header>
       <div class="modal-body">
         <section class="sec">
@@ -493,10 +493,10 @@ body[data-theme="light"]{color-scheme:light}
   </div>
 
   <div id="sc-modal" class="overlay" hidden>
-    <div class="modal small">
+    <div class="modal small" role="dialog" aria-modal="true" aria-labelledby="sc-modal-heading">
       <header class="modal-head">
         <h2 id="sc-modal-heading">Ярлык</h2>
-        <button class="close-btn" data-close="sc-modal">✕</button>
+        <button class="close-btn" type="button" data-close="sc-modal" aria-label="Закрыть">✕</button>
       </header>
       <form id="sc-form" class="modal-body">
         <label class="fld">Название<input id="sc-name" type="text" required></label>
@@ -518,7 +518,32 @@ body[data-theme="light"]{color-scheme:light}
     </div>
   </div>
 
-  <div id="toasts"></div>
+  <div id="cat-modal" class="overlay" hidden>
+    <div class="modal small" role="dialog" aria-modal="true" aria-labelledby="cat-modal-heading">
+      <header class="modal-head">
+        <h2 id="cat-modal-heading">Категория</h2>
+        <button class="close-btn" type="button" data-close="cat-modal" aria-label="Закрыть">✕</button>
+      </header>
+      <form id="cat-form" class="modal-body">
+        <label class="fld">Название<input id="cat-name" type="text" maxlength="30" required></label>
+        <label class="fld">Эмодзи<input id="cat-icon" type="text" maxlength="8" placeholder="🚀"></label>
+        <div class="sc-icon-row">
+          <button type="button" id="cat-img-upload" class="btn-small">Загрузить картинку</button>
+          <button type="button" id="cat-img-clear" class="btn-small">Убрать картинку</button>
+        </div>
+        <div class="sc-icon-preview-row">
+          <img id="cat-img-preview" src="" alt="" hidden>
+          <span id="cat-img-hint" class="hint"></span>
+        </div>
+        <div class="modal-actions">
+          <button type="submit" class="btn primary">Сохранить</button>
+          <button type="button" id="cat-delete" class="btn danger">Удалить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toasts" role="status" aria-live="polite"></div>
   <script type="module" src="scripts/app.js"></script>
 </body>
 </html>

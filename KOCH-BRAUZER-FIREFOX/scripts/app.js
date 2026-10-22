@@ -307,31 +307,34 @@ function normalizeCategories(cats) {
     }).filter(Boolean);
 }
 
+const HISTORY_LIMIT = 50;
+
 function normalizeHistory(h) {
     if (!Array.isArray(h)) return [];
     return h.map(x => ({
         id: typeof x?.id === 'string' && x.id ? x.id : uid(),
-                       q: typeof x?.q === 'string' ? x.q : ''
-    }));
+        q: typeof x?.q === 'string' ? x.q : ''
+    })).filter(x => x.q).slice(0, HISTORY_LIMIT);
 }
 
-function migrateBackup(data) {
-    if (!data || typeof data !== 'object') throw new Error('Невалидный бэкап');
+/* Ключи настроек, по которым узнаётся очень старый бэкап, где настройки лежали прямо в корне файла. */
+const SETTINGS_KEYS = ['theme', 'customColor', 'title', 'subtitle', 'cities', 'avatar', 'engine', 'bg', 'appearance'];
 
-    if (data.format === 'koch-brauzer-profile' && data.profile) {
-        const p = data.profile;
-        return {
-            settings: normalizeSettings(p.settings),
-            categories: normalizeCategories(p.categories || p.settings?.categories),
-            history: normalizeHistory(p.history),
-            media: Array.isArray(p.media) ? p.media.filter(m => m && m.id && m.data) : []
-        };
-    }
+/* Возвращает только те разделы, которые реально есть в файле (остальные — null),
+   чтобы частичный бэкап не затирал существующие данные значениями по умолчанию.
+   Файл без единого узнаваемого раздела отклоняется: раньше любой JSON-объект
+   молча сбрасывал настройки, категории и историю. */
+function migrateBackup(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Файл не похож на бэкап KOCH BRAUZER');
+    const p = data.format === 'koch-brauzer-profile' && data.profile && typeof data.profile === 'object' ? data.profile : data;
+    const rawSettings = p.settings && typeof p.settings === 'object' ? p.settings : (SETTINGS_KEYS.some(k => k in p) ? p : null);
+    const rawCats = p.categories ?? p.data?.categories ?? p.settings?.categories;
+    if (!rawSettings && rawCats == null && !Array.isArray(p.history)) throw new Error('Файл не похож на бэкап KOCH BRAUZER');
     return {
-        settings: normalizeSettings(data.settings || data),
-        categories: normalizeCategories(data.categories || data.data?.categories || data.settings?.categories),
-        history: normalizeHistory(data.history),
-        media: Array.isArray(data.media) ? data.media.filter(m => m && m.id && m.data) : []
+        settings: rawSettings ? normalizeSettings(rawSettings) : null,
+        categories: rawCats == null ? null : normalizeCategories(rawCats),
+        history: Array.isArray(p.history) ? normalizeHistory(p.history) : null,
+        media: Array.isArray(p.media) ? p.media.filter(m => m && m.id && m.data) : []
     };
 }
 
@@ -549,23 +552,15 @@ const store = {
 
         if (migrated.media.length > 0) await importMedia(migrated.media);
 
-        if (migrated.settings.bg.idb) {
-            const inBackup = migrated.media.some(m => m.id === migrated.settings.bg.idb);
-            if (!inBackup) {
-                const exists = await mediaGet(migrated.settings.bg.idb).catch(() => null);
-                if (!exists) {
-                    migrated.settings.bg.idb = '';
-                    if (!migrated.settings.bg.url) migrated.settings.bg.type = 'none';
-                }
-            }
+        const bg = migrated.settings?.bg;
+        if (bg?.idb && !migrated.media.some(m => m.id === bg.idb) && !(await mediaGet(bg.idb).catch(() => null))) {
+            bg.idb = '';
+            if (!bg.url) bg.type = 'none';
         }
 
-        await apiStorage.set({
-            settings: migrated.settings,
-            categories: migrated.categories,
-            history: migrated.history,
-            schemaVersion: CURRENT_SCHEMA
-        });
+        const next = { schemaVersion: CURRENT_SCHEMA };
+        for (const k of ['settings', 'categories', 'history']) if (migrated[k]) next[k] = migrated[k];
+        await apiStorage.set(next);
         settingsCache = null;
         return migrated;
     }
@@ -1132,7 +1127,7 @@ async function goSearch() {
     const asUrl = normalizeUrl(raw);
     const isUrl = /^https?:\/\//i.test(raw) || (asUrl !== '' && !raw.includes(' '));
     if (!isUrl) {
-        qHistory = [{ id: String(Date.now()), q: raw }, ...qHistory.filter(h => h.q !== raw)].slice(0, 50);
+        qHistory = [{ id: String(Date.now()), q: raw }, ...qHistory.filter(h => h.q !== raw)].slice(0, HISTORY_LIMIT);
         await store.setHistory(qHistory);
     }
     hideSuggest();
@@ -1161,6 +1156,8 @@ async function initSearch(preloaded, history) {
         }
         if (e.key === 'Escape') hideSuggest();
     });
+    // История общая для всех открытых вкладок: без этого вкладка со старой копией затирает чужие запросы
+    apiStorage.onChanged((changes, area) => { if (area === 'local' && changes.history) qHistory = normalizeHistory(changes.history.newValue); });
     $('#search-go')?.addEventListener('click', goSearch);
     $('#clear-history')?.addEventListener('click', async () => { qHistory = []; await store.setHistory([]); renderSuggest(); });
     document.addEventListener('click', e => { if (!e.target.closest('.search-row')) hideSuggest(); });
@@ -1214,78 +1211,11 @@ function buildCard(cat) {
 
     const head = el('div', { class: 'cat-head' },
                     icoNode,
-                    el('span', { class: 'cat-name' }, cat.name),
-                    el('button', { class: 'cat-add', onclick: e => { e.stopPropagation(); openScModal(cat.id, null); } }, '＋')
+                    el('span', { class: 'cat-name', title: cat.name }, cat.name),
+                    el('button', { class: 'cat-add', type: 'button', title: 'Добавить ярлык', 'aria-label': 'Добавить ярлык в «' + cat.name + '»',
+                        onclick: e => { e.stopPropagation(); openScModal(cat.id, null); } }, '＋')
     );
-    head.addEventListener('contextmenu', e => {
-        e.preventDefault();
-        const hasImg = !!cat.image;
-        const hasEmoji = !!cat.icon;
-        const action = prompt(
-            `Категория «${cat.name}»:\n` +
-            `1 — переименовать\n` +
-            `2 — удалить\n` +
-            `3 — загрузить картинку категории\n` +
-            `4 — убрать картинку (вернуть эмодзи)\n` +
-            `5 — убрать эмодзи\n` +
-            `6 — поставить случайный эмодзи\n` +
-            `7 — ввести своё эмодзи`, '1');
-        if (action === '1') {
-            const name = prompt('Новое название:', cat.name);
-            if (name?.trim()) { cat.name = name.trim().toUpperCase(); saveCats(); }
-        } else if (action === '2' && confirm(`Удалить категорию «${cat.name}»?`)) {
-            categories = categories.filter(c => c.id !== cat.id);
-            saveCats(); toast('Категория удалена');
-        } else if (action === '3') {
-            uploadCategoryImage(cat.id);
-        } else if (action === '4') {
-            if (hasImg) {
-                cat.image = '';
-                saveCats();
-                toast('Картинка категории убрана');
-            } else {
-                toast('У категории нет картинки', 'error');
-            }
-        } else if (action === '5') {
-            if (hasEmoji && !hasImg) {
-                cat.icon = '';
-                saveCats();
-                toast('Эмодзи убрано');
-            } else if (hasImg) {
-                toast('Сначала убери картинку (пункт 4)', 'error');
-            } else {
-                toast('У категории нет эмодзи', 'error');
-            }
-        } else if (action === '6') {
-            const emojis = ['🌐','🎵','🎮','💻','🛒','📚','🎨','📰','🏠','📱','🔧','💎','🚀','🎯','☕','📺','🌙','⭐','🎬','🧩'];
-            cat.icon = emojis[Math.floor(Math.random() * emojis.length)];
-            saveCats();
-            toast('Случайный эмодзи: ' + cat.icon);
-        } else if (action === '7') {
-            const customEmoji = prompt(
-                'Введите свой эмодзи:\n\n' +
-                'Примеры: 🚀 💡 🎧 🐱  🔒 ✨\n' +
-                '(можно скопировать с emojipedia.org или из любой переписки)\n\n' +
-                'Пустое поле — убрать эмодзи',
-                cat.icon || ''
-            );
-            if (customEmoji === null) return;
-            if (customEmoji.trim() === '') {
-                cat.icon = '';
-                saveCats();
-                toast('Эмодзи убрано');
-                return;
-            }
-            const trimmed = customEmoji.trim();
-            if (trimmed.length > 8) {
-                toast('Слишком длинно. Это эмодзи?', 'error');
-                return;
-            }
-            cat.icon = trimmed;
-            saveCats();
-            toast('Эмодзи обновлён: ' + cat.icon);
-        }
-    });
+    head.addEventListener('contextmenu', e => { e.preventDefault(); openCatModal(cat.id); });
     head.addEventListener('pointerdown', e => startCatDrag(e, card, head));
     card.addEventListener('dragover', e => {
         if (!dragState || dragState.type !== 'chip') return;
@@ -1315,13 +1245,15 @@ function clearDrag() {
 }
 
 function buildChip(cat, sc) {
-    const chip = el('div', { class: 'chip', draggable: true,
-        onclick: e => {
-            const u = normalizeUrl(sc.url); if (!u) return;
-            if (e.ctrlKey || e.metaKey) window.open(u, '_blank', 'noopener');
-            else location.href = u;
-        },
-        onauxclick: e => { if (e.button === 1) { const u = normalizeUrl(sc.url); if (u) window.open(u, '_blank', 'noopener'); } } });
+    const go = newTab => {
+        const u = normalizeUrl(sc.url); if (!u) return;
+        if (newTab) window.open(u, '_blank', 'noopener'); else location.href = u;
+    };
+    // draggable="true" задан явно: пустое значение атрибута (draggable: true) по спецификации означает auto, а у div это «не перетаскивается»
+    const chip = el('div', { class: 'chip', draggable: 'true', tabindex: 0, role: 'link',
+        onclick: e => go(e.ctrlKey || e.metaKey),
+        onauxclick: e => { if (e.button === 1) go(true); },
+        onkeydown: e => { if (e.key === 'Enter') go(e.ctrlKey || e.metaKey); } });
     let ico;
     if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:')))
         ico = el('img', { src: sc.icon, alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, ((sc.title || '').trim()[0] || '🌐').toUpperCase())) });
@@ -1379,7 +1311,7 @@ function flipReorder(wrap, mutate) {
 /* Перенос категории: тянем за шапку; под курсором — плейсхолдер, остальные карточки
    расступаются с FLIP-анимацией, порядок сохраняется один раз при отпускании. */
 function startCatDrag(e, card, head) {
-    if (e.button !== 0 || e.target.closest('.cat-add')) return;
+    if (e.button !== 0 || e.target.closest('button')) return;
     const wrap = card.parentElement, sx = e.clientX, sy = e.clientY, pid = e.pointerId;
     let on = false, ph = null, grab = null, fix = null, lock = 0;
     let ended = false;
@@ -1444,28 +1376,6 @@ function startCatDrag(e, card, head) {
     head.addEventListener('pointercancel', cancelUp);
 }
 
-function uploadCategoryImage(catId) {
-    const cat = categories.find(c => c.id === catId);
-    if (!cat) return;
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = async e => {
-        const file = e.target.files[0];
-        if (!file) return;
-        try {
-            const dataUrl = await downscaleImage(file, 128);
-            cat.image = dataUrl;
-            await saveCats();
-            toast('Картинка категории обновлена');
-        } catch (err) {
-            console.error('[KOCH] cat image:', err);
-            toast('Не удалось загрузить картинку', 'error');
-        }
-    };
-    input.click();
-}
-
 function updateIconPreview(iconValue, urlValue) {
     const preview = $('#sc-icon-preview');
     const hint = $('#sc-icon-hint');
@@ -1486,25 +1396,27 @@ function updateIconPreview(iconValue, urlValue) {
     }
 }
 
-function uploadShortcutIcon() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = async e => {
-        const file = e.target.files[0];
-        if (!file) return;
-        try {
-            const dataUrl = await downscaleImage(file, 64);
-            const iconField = $('#sc-icon');
-            if (iconField) iconField.value = dataUrl;
-            updateIconPreview(dataUrl, $('#sc-url')?.value || '');
-            toast('Иконка загружена');
-        } catch (err) {
-            console.error('[KOCH] icon upload:', err);
-            toast('Не удалось загрузить иконку', 'error');
-        }
-    };
-    input.click();
+/* Выбор картинки с диском и уменьшение до max px; null — выбор отменён или файл не прочитался. */
+function pickImage(max) {
+    return new Promise(resolve => {
+        const input = el('input', { type: 'file', accept: 'image/*' });
+        input.onchange = async () => {
+            const file = input.files[0];
+            if (!file) return resolve(null);
+            try { resolve(await downscaleImage(file, max)); }
+            catch (err) { console.error('[KOCH] image:', err); toast('Не удалось загрузить картинку', 'error'); resolve(null); }
+        };
+        input.click();
+    });
+}
+
+async function uploadShortcutIcon() {
+    const dataUrl = await pickImage(64);
+    if (!dataUrl) return;
+    const iconField = $('#sc-icon');
+    if (iconField) iconField.value = dataUrl;
+    updateIconPreview(dataUrl, $('#sc-url')?.value || '');
+    toast('Иконка загружена');
 }
 
 function openScModal(catId, scId) {
@@ -1518,10 +1430,22 @@ function openScModal(catId, scId) {
     updateIconPreview(sc?.icon || '', sc?.url || '');
     const h = $('#sc-modal-heading'); if (h) h.textContent = sc ? 'Изменить ярлык' : 'Новый ярлык';
     const d = $('#sc-delete'); if (d) d.style.display = sc ? '' : 'none';
-    const m = $('#sc-modal'); if (m) m.hidden = false;
+    toggleOverlay($('#sc-modal'), true, '#sc-name');
 }
 
-function closeScModal() { const m = $('#sc-modal'); if (m) m.hidden = true; scModal = { catId: null, scId: null }; }
+/* Диалоги: фокус переходит в диалог, остальная страница недоступна по Tab (inert),
+   после закрытия фокус возвращается туда, откуда диалог открыли. */
+let overlayReturn = null;
+function toggleOverlay(ov, open, focusSel = '.close-btn') {
+    if (!ov || ov.hidden === !open) return;
+    ov.hidden = !open;
+    for (const n of document.querySelectorAll('.topbar,.panel')) n.inert = open;
+    if (open) { overlayReturn = document.activeElement; ov.querySelector(focusSel)?.focus(); }
+    else { overlayReturn?.focus?.(); overlayReturn = null; }
+}
+const closeOverlays = () => document.querySelectorAll('.overlay:not([hidden])').forEach(ov => toggleOverlay(ov, false));
+
+function closeScModal() { toggleOverlay($('#sc-modal'), false); scModal = { catId: null, scId: null }; }
 
 function bindScModal() {
     const form = $('#sc-form'); if (!form) return;
@@ -1530,19 +1454,21 @@ function bindScModal() {
         const cat = categories.find(c => c.id === scModal.catId); if (!cat) return;
         const data = {
             title: ($('#sc-name')?.value || '').trim(),
-                          url: normalizeUrl($('#sc-url')?.value) || (($('#sc-url')?.value || '').trim()),
-                          icon: ($('#sc-icon')?.value || '').trim()
+            url: normalizeUrl($('#sc-url')?.value),
+            icon: ($('#sc-icon')?.value || '').trim()
         };
-        if (!data.title || !data.url) return;
-                          if (scModal.scId) {
-                              const sc = cat.shortcuts.find(x => x.id === scModal.scId);
-                              if (sc) Object.assign(sc, data);
-                          toast('Ярлык обновлён');
-                          } else {
-                              cat.shortcuts.push({ id: uid(), ...data });
-                              toast('Ярлык добавлен');
-                          }
-                          closeScModal(); saveCats();
+        if (!data.title) return;
+        // нераспознанный адрес раньше сохранялся «как есть», и плитка молча не открывалась
+        if (!data.url) { toast('Не похоже на адрес сайта. Пример: example.com', 'error'); return; }
+        if (scModal.scId) {
+            const sc = cat.shortcuts.find(x => x.id === scModal.scId);
+            if (sc) Object.assign(sc, data);
+            toast('Ярлык обновлён');
+        } else {
+            cat.shortcuts.push({ id: uid(), ...data });
+            toast('Ярлык добавлен');
+        }
+        closeScModal(); saveCats();
     });
     $('#sc-delete')?.addEventListener('click', () => {
         const cat = categories.find(c => c.id === scModal.catId);
@@ -1567,26 +1493,59 @@ function bindScModal() {
     }, 300));
 }
 
-function bindAddCat() {
-    $('#add-cat')?.addEventListener('click', async () => {
-        const name = prompt('Название новой категории:');
-        if (!name?.trim()) return;
-        const emojis = ['🌐','🎵','🎮','💻','🛒','📚','🎨','📰','🏠','🚀'];
-        categories.push({
-            id: uid(),
-                        icon: emojis[Math.floor(Math.random() * emojis.length)],
-                        image: '',
-                        name: name.trim().toUpperCase(),
-                        shortcuts: []
-        });
-        await saveCats();
-        toast('Категория добавлена');
+const CAT_EMOJIS = ['🌐','🎵','🎮','💻','🛒','📚','🎨','📰','🏠','📱','🔧','💎','🚀','🎯','☕','📺','🌙','⭐','🎬','🧩'];
+let catModal = { id: null, image: '' };   // image — черновик, в категорию попадёт при сохранении
+
+function renderCatImage() {
+    const img = $('#cat-img-preview'), has = !!catModal.image;
+    img.hidden = !has;
+    if (has) img.src = catModal.image;
+    $('#cat-img-clear').hidden = !has;
+    $('#cat-img-hint').textContent = has ? 'Картинка показывается вместо эмодзи' : 'Без картинки показывается эмодзи';
+}
+
+/* id === null — новая категория */
+function openCatModal(id) {
+    const cat = categories.find(c => c.id === id);
+    catModal = { id: cat ? cat.id : null, image: cat?.image || '' };
+    $('#cat-modal-heading').textContent = cat ? 'Категория' : 'Новая категория';
+    $('#cat-name').value = cat ? cat.name : '';
+    $('#cat-icon').value = cat ? cat.icon : CAT_EMOJIS[Math.floor(Math.random() * CAT_EMOJIS.length)];
+    $('#cat-delete').hidden = !cat;
+    renderCatImage();
+    toggleOverlay($('#cat-modal'), true, '#cat-name');
+}
+
+function bindCatModal() {
+    $('#add-cat')?.addEventListener('click', () => openCatModal(null));
+    $('#cat-form')?.addEventListener('submit', e => {
+        e.preventDefault();
+        const name = $('#cat-name').value.trim().toUpperCase();
+        if (!name) return;
+        const fields = { name, icon: $('#cat-icon').value.trim(), image: catModal.image };
+        const cat = categories.find(c => c.id === catModal.id);
+        if (cat) Object.assign(cat, fields);
+        else categories.push({ id: uid(), shortcuts: [], ...fields });
+        toggleOverlay($('#cat-modal'), false);
+        saveCats();
+        toast(cat ? 'Категория обновлена' : 'Категория добавлена');
     });
+    $('#cat-delete')?.addEventListener('click', () => {
+        const cat = categories.find(c => c.id === catModal.id);
+        if (!cat || !confirm(`Удалить категорию «${cat.name}» вместе с ярлыками?`)) return;
+        categories = categories.filter(c => c !== cat);
+        toggleOverlay($('#cat-modal'), false);
+        saveCats();
+        toast('Категория удалена');
+    });
+    $('#cat-img-upload')?.addEventListener('click', async () => {
+        const dataUrl = await pickImage(128);
+        if (dataUrl) { catModal.image = dataUrl; renderCatImage(); }
+    });
+    $('#cat-img-clear')?.addEventListener('click', () => { catModal.image = ''; renderCatImage(); });
 }
 
 /* ---------- 11. Настройки ---------- */
-let currentSettings = null;
-
 const on = (id, ev, fn) => { const e = document.getElementById(id); if (e) e.addEventListener(ev, fn); return e; };
 const val = (id, v) => { const e = document.getElementById(id); if (e) { e.value = v; if (e.type === 'range') paintRange(e); } };
 /* Заливка трека слайдера до текущего значения (переменная --p) */
@@ -1595,8 +1554,6 @@ function paintRange(e) {
     e.style.setProperty('--p', ((e.value - mn) / (mx - mn || 1) * 100) + '%');
 }
 const txt = (id, s) => { const e = document.getElementById(id); if (e) e.textContent = s; };
-
-async function ensureSettings() { if (!currentSettings) currentSettings = await store.getSettings(); }
 
 function downscaleImage(file, max = 256) {
     return new Promise((resolve, reject) => {
@@ -1619,23 +1576,21 @@ function downscaleImage(file, max = 256) {
     });
 }
 
+/* Новое значение считается внутри очереди store.updateSettings, от актуальных данных хранилища:
+   раньше оно считалось от копии, снятой при открытии настроек, и откатывало правки из других вкладок. */
+const resolveValue = (v, prev) => typeof v === 'function' ? v(prev) : v;
+
 async function updateSetting(key, valueOrFn) {
-    await ensureSettings();
-    const v = typeof valueOrFn === 'function' ? valueOrFn(currentSettings[key]) : valueOrFn;
-    currentSettings = await store.updateSettings(s => ({ ...s, [key]: v }));
+    await store.updateSettings(s => ({ ...s, [key]: resolveValue(valueOrFn, s[key]) }));
 }
 
 async function updateAppearanceSetting(key, valueOrFn) {
-    await ensureSettings();
-    const cur = currentSettings.appearance || {};
-    const v = typeof valueOrFn === 'function' ? valueOrFn(cur[key]) : valueOrFn;
-    currentSettings = await store.updateSettings(s => ({ ...s, appearance: { ...s.appearance, [key]: v } }));
-    applyAppearance(currentSettings.appearance);
+    const s = await store.updateSettings(s => ({ ...s, appearance: { ...s.appearance, [key]: resolveValue(valueOrFn, s.appearance[key]) } }));
+    applyAppearance(s.appearance);
 }
 
 async function setCustomColor(hex) {
-    await ensureSettings();
-    currentSettings = await store.updateSettings(s => ({ ...s, customColor: hex, theme: 'custom' }));
+    await store.updateSettings(s => ({ ...s, customColor: hex, theme: 'custom' }));
     document.body.dataset.theme = 'custom';
     appliedTheme = 'custom';
     applyCustomThemeVars(hex);
@@ -1665,7 +1620,6 @@ function paintAvatar(url) {
 
 function invalidateRuntimeState() {
     settingsCache = null;
-    currentSettings = null;
     categories = [];
     qHistory = [];
     appliedTheme = null;
@@ -1739,7 +1693,6 @@ async function applyEverything() {
     paintEngine();
     initClocks(s);
     await renderCats();
-    currentSettings = s;
     store.sig = JSON.stringify(s);
     syncSettingsUI(s);
 }
@@ -1747,10 +1700,10 @@ async function applyEverything() {
 function bindSettings() {
     on('settings-btn', 'click', openSettings);
     document.querySelectorAll('.overlay').forEach(ov => {
-        ov.addEventListener('click', e => { if (e.target === ov) ov.hidden = true; });
+        ov.addEventListener('click', e => { if (e.target === ov) toggleOverlay(ov, false); });
     });
     document.querySelectorAll('[data-close]').forEach(b => {
-        b.addEventListener('click', () => { const t = document.getElementById(b.getAttribute('data-close')); if (t) t.hidden = true; });
+        b.addEventListener('click', () => toggleOverlay(document.getElementById(b.getAttribute('data-close')), false));
     });
 
     on('set-title', 'input', debounce(async e => {
@@ -1909,10 +1862,8 @@ function bindSettings() {
 function setSlider(inputId, value, valueId, suffix) { val(inputId, value); txt(valueId, value + suffix); }
 
 async function openSettings() {
-    currentSettings = await store.getSettings();
-    syncSettingsUI(currentSettings);
-    const ov = document.getElementById('settings-overlay');
-    if (ov) ov.hidden = false;
+    syncSettingsUI(await store.getSettings());
+    toggleOverlay(document.getElementById('settings-overlay'), true);
 }
 
 /* ---------- 12. Запуск ---------- */
@@ -1934,8 +1885,8 @@ function initThemeSelector(cur) {
 function bindKeys() {
     document.addEventListener('keydown', e => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchInput()?.focus(); }
-        if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); const ov = $('#settings-overlay'); if (ov) ov.hidden = false; }
-        if (e.key === 'Escape') { const ov = $('#settings-overlay'); if (ov) ov.hidden = true; closeScModal(); }
+        if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
+        if (e.key === 'Escape') closeOverlays();
     });
 }
 
@@ -1958,7 +1909,7 @@ async function boot() {
         // фон (IndexedDB, видео) подгружается параллельно и не задерживает первый показ интерфейса
         applyBackground(s);
         const searchReady = initSearch(s, history);
-        bindAddCat(); bindScModal(); bindSettings(); bindKeys();
+        bindCatModal(); bindScModal(); bindSettings(); bindKeys();
         await Promise.all([searchReady, renderCats(cats)]);
 
         const sync = debounce(async next => {
@@ -1975,6 +1926,7 @@ async function boot() {
             paintTitle(next);
             if (sub) sub.textContent = next.subtitle || '';
             paintAvatar(next.avatar || '');
+            if (ENGINES[next.engine] && next.engine !== engine) { engine = next.engine; paintEngine(); }
             const sel = $('#theme-select'); if (sel) sel.value = next.theme || 'rose';
             if (JSON.stringify(next.cities || []) !== clockCitiesSig) initClocks(next);
         }, 120);
