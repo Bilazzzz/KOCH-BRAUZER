@@ -18,7 +18,7 @@
 
 [**🦊 Установить для Firefox**](https://addons.mozilla.org/ru/firefox/addon/koch-brauzer/) &nbsp;•&nbsp;
 [**🌐 Установить для Edge**](https://microsoftedge.microsoft.com/addons/detail/koch-brauzer/kmkmnnjonlnhcpdcjfgfhhjepcbakefm) &nbsp;•&nbsp;
-[**🛡 VirusTotal**](https://www.virustotal.com/gui/file/2a552d002d6f2ea0c8575a360118a13214faa1d12f2ab0ba00c2478ad8d71a93/community)
+[**🛡 VirusTotal**](https://www.virustotal.com/gui/file/d88f9aeed7e54464c953759c98cef733e02ee5f23cab22c93d14d0a42f554667/detection)
 
 <br>
 
