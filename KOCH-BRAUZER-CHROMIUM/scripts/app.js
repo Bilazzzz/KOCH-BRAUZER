@@ -49,7 +49,17 @@ const apiStorage = {
 /* ---------- 2. Утилиты ---------- */
 const $ = (s, c = document) => c.querySelector(s);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const clone = o => o === undefined ? undefined : JSON.parse(JSON.stringify(o));
+function clone(o) {
+    if (o === null || typeof o !== 'object') return o;
+    if (Array.isArray(o)) {
+        const a = new Array(o.length);
+        for (let i = 0; i < o.length; i++) a[i] = clone(o[i]);
+        return a;
+    }
+    const r = {};
+    for (const k in o) if (Object.prototype.hasOwnProperty.call(o, k)) r[k] = clone(o[k]);
+    return r;
+}
 const num = (v, def, min, max) => {
     const n = typeof v === 'number' ? v : parseFloat(v);
     if (isNaN(n)) return def;
@@ -82,6 +92,8 @@ const debounce = (fn, ms = 250) => {
 
 function toast(msg, type = 'info') {
     const box = document.getElementById('toasts');
+    if (!box) return;
+    while (box.children.length >= 4) box.firstElementChild.remove();
     const t = el('div', { class: type === 'error' ? 'toast toast-error' : 'toast' }, msg);
     box.append(t);
     setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, 2600);
@@ -426,21 +438,24 @@ async function base64ToBlob(dataUrl, mime) {
 }
 
 async function compressImageBlob(blob, maxWidth = 1920) {
-    if (!blob.type || !blob.type.startsWith('image/') || blob.size < 512 * 1024) return blob;
+    if (!blob.type || !blob.type.startsWith('image/') || blob.type === 'image/gif' || blob.type === 'image/svg+xml' || blob.size < 512 * 1024) return blob;
     return new Promise(resolve => {
         const url = URL.createObjectURL(blob);
         const img = new Image();
         img.onload = () => {
-            const scale = Math.min(1, maxWidth / Math.max(img.width, img.height));
-            if (scale >= 1) { URL.revokeObjectURL(url); resolve(blob); return; }
+            const scale = Math.min(1, maxWidth / Math.max(img.width || maxWidth, img.height || maxWidth));
+            if (scale >= 1 && blob.size < 1536 * 1024) { URL.revokeObjectURL(url); resolve(blob); return; }
             const canvas = document.createElement('canvas');
-            canvas.width = Math.round(img.width * scale);
-            canvas.height = Math.round(img.height * scale);
-            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             canvas.toBlob(b => {
                 URL.revokeObjectURL(url);
                 resolve(b && b.size < blob.size ? b : blob);
-            }, 'image/jpeg', 0.85);
+            }, 'image/webp', 0.88);
         };
         img.onerror = () => { URL.revokeObjectURL(url); resolve(blob); };
         img.src = url;
@@ -766,14 +781,19 @@ async function applyBackgroundNow(preloaded) {
         document.documentElement.style.removeProperty('--bg-img');
         document.documentElement.classList.remove('img-bg');
         v.style.opacity = op;
+        v.onerror = () => {
+            bgVideoActive = false; bgVideoUrl = '';
+            releaseVideo(v); v.hidden = true; root.classList.add('no-bg');
+        };
         bgVideoActive = true;
         bgVideoUrl = url;
     } else if (bg.type === 'image' && url) {
         bgVideoActive = false; bgVideoUrl = '';
         releaseVideo(v);
         v.hidden = true; i.hidden = false;
-        i.style.backgroundImage = `url("${url}")`; i.style.opacity = op;
-        document.documentElement.style.setProperty('--bg-img', `url("${url}")`);
+        const safeUrl = `url("${String(url).replace(/[\\"\n\r]/g, '\\$&')}")`;
+        i.style.backgroundImage = safeUrl; i.style.opacity = op;
+        document.documentElement.style.setProperty('--bg-img', safeUrl);
         document.documentElement.classList.add('img-bg');
     } else {
         bgVideoActive = false; bgVideoUrl = '';
@@ -878,8 +898,18 @@ const wxStore = (() => {
     return {
         geo: c => load().geo[c] || null,
         wx: k => load().wx[k] || null,
-        setGeo(c, v) { load().geo[c] = v; save(); },
-        setWx(k, v) { load().wx[k] = v; save(); }
+        setGeo(c, v) {
+            const g = load().geo;
+            const keys = Object.keys(g);
+            if (keys.length >= 40) delete g[keys[0]];
+            g[c] = v; save();
+        },
+        setWx(k, v) {
+            const w = load().wx;
+            const keys = Object.keys(w);
+            if (keys.length >= 40) delete w[keys[0]];
+            w[k] = v; save();
+        }
     };
 })();
 let wxRetryN = 0, wxRetryT = 0, wxNeedRetry = false;
@@ -889,6 +919,27 @@ function scheduleWxRetry() {
     wxRetryT = setTimeout(() => { if (isPageActive()) refreshWeather(); }, Math.min(3000 * 2 ** Math.min(wxRetryN++, 5), 60000));
 }
 const wxText = w => `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
+function wxDesc(code) {
+    if (code === 0) return 'Ясно';
+    if (code === 1) return 'Преимущественно ясно';
+    if (code === 2) return 'Переменная облачность';
+    if (code === 3) return 'Пасмурно';
+    if (code <= 48) return 'Туман';
+    if (code <= 57) return 'Морось';
+    if (code <= 67) return 'Дождь';
+    if (code <= 77) return 'Снег';
+    if (code <= 82) return 'Ливень';
+    if (code <= 86) return 'Снегопад';
+    return 'Гроза';
+}
+function applyWxNode(el, w) {
+    if (!el) return;
+    if (!w) { el.textContent = '—'; el.removeAttribute('title'); return; }
+    const txt = wxText(w);
+    if (el.textContent !== txt) el.textContent = txt;
+    const timeStr = w.at ? new Date(w.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
+    el.title = `${wxDesc(w.code)}${timeStr ? ' • обновлено в ' + timeStr : ''}`;
+}
 
 const geoPending = new Map();
 async function geocode(city) {
@@ -969,7 +1020,7 @@ async function refreshWeather() {
     const pending = new Map();
     let failed = false;
     await Promise.all(slots.map(async (s, i) => {
-        const wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
+        const wxEl = s.wxEl || (s.wxEl = $(i === 0 ? '#wx-a' : '#wx-b'));
         if (!wxEl) return;
         // повторная попытка геокодинга, если при старте не было сети
         if (!s.geo && s.city && s.city !== '—') {
@@ -978,20 +1029,20 @@ async function refreshWeather() {
         }
         if (gen !== clockGen) return;
         const named = s.city && s.city !== '—';
-        if (!s.geo) { wxEl.textContent = '—'; if (named) failed = true; return; }
+        if (!s.geo) { applyWxNode(wxEl, null); if (named) failed = true; return; }
         const key = s.geo.lat + ',' + s.geo.lon;
         const cached = wxStore.wx(key);
-        if (cached && Date.now() - cached.at < WX_STALE && gen === clockGen) wxEl.textContent = wxText(cached);
+        if (cached && Date.now() - cached.at < WX_STALE && gen === clockGen) applyWxNode(wxEl, cached);
         try {
             // один и тот же город в обоих слотах — один запрос вместо двух
             if (!pending.has(key)) pending.set(key, weather(s.geo.lat, s.geo.lon));
             const w = await pending.get(key);
-            if (gen === clockGen) wxEl.textContent = wxText(w);
+            if (gen === clockGen) applyWxNode(wxEl, w);
         } catch {
             failed = true;
             // при сбое показываем последнюю известную погоду (до 6 ч), а не «—»
             const c = wxStore.wx(key);
-            if (gen === clockGen) wxEl.textContent = c && Date.now() - c.at < WX_STALE ? wxText(c) : '—';
+            if (gen === clockGen) applyWxNode(wxEl, c && Date.now() - c.at < WX_STALE ? c : null);
         }
     }));
     if (gen !== clockGen) return;
@@ -1001,8 +1052,18 @@ async function refreshWeather() {
 }
 window.addEventListener('online', () => { wxRetryN = 0; if (clocksReady && isPageActive()) refreshWeather(); });
 
+function scheduleNextTick() {
+    if (tickTimer) clearTimeout(tickTimer);
+    if (!isPageActive() || !clockSlots.length) { tickTimer = null; return; }
+    const delay = 1005 - (Date.now() % 1000);
+    tickTimer = setTimeout(() => {
+        tick();
+        scheduleNextTick();
+    }, delay);
+}
+
 function stopClockTimers() {
-    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+    if (tickTimer) { clearTimeout(tickTimer); tickTimer = null; }
     if (wxTimer) { clearInterval(wxTimer); wxTimer = null; }
     if (wxRetryT) { clearTimeout(wxRetryT); wxRetryT = null; }
 }
@@ -1011,7 +1072,7 @@ function startClockTimers() {
     stopClockTimers();
     if (!isPageActive() || !clockSlots.length) return;
     tick();
-    tickTimer = setInterval(tick, 1000);
+    scheduleNextTick();
     if (clocksReady) {
         wxTimer = setInterval(refreshWeather, WX_INTERVAL);
         if (wxNeedRetry || Date.now() - lastWxAt >= WX_INTERVAL) { wxRetryN = 0; refreshWeather(); }
@@ -1042,12 +1103,12 @@ async function initClocks(preloaded) {
         const savedGeo = key ? (geoCache.get(key) || wxStore.geo(key) || wxStore.geo(rawCity)) : null;
         if (wxEl) {
             const cw = savedGeo ? wxStore.wx(savedGeo.lat + ',' + savedGeo.lon) : null;
-            wxEl.textContent = cw && Date.now() - cw.at < WX_STALE ? wxText(cw) : '—';
+            applyWxNode(wxEl, cw && Date.now() - cw.at < WX_STALE ? cw : null);
         }
-        return { city, tz: savedGeo?.tz || null, geo: savedGeo || null, fmt: null, el: $(i === 0 ? '#time-a' : '#time-b') };
+        return { city, tz: savedGeo?.tz || null, geo: savedGeo || null, fmt: null, el: $(i === 0 ? '#time-a' : '#time-b'), wxEl };
     });
     tick();
-    if (isPageActive()) tickTimer = setInterval(tick, 1000);
+    if (isPageActive()) scheduleNextTick();
     (async () => {
         await Promise.all(clockSlots.map(async sl => {
             sl.geo = await geocode(sl.city);
@@ -1130,24 +1191,25 @@ function renderSuggest() {
     const raw = inp.value.trim(), q = raw.toLowerCase();
     const items = qHistory.filter(h => !q || h.q.toLowerCase().includes(q)).slice(0, 8);
     sugSel = -1;
-    const rows = items.map(h => {
+    const rows = items.map((h, idx) => {
         const ago = agoLabel(h.id);
         const fill = svgEl(ICO_FILL, '', 'Вставить в поле');
         const del = svgEl(ICO_X, 'del', 'Удалить');
-        const li = el('li', { role: 'option', dataset: { hid: h.id, hq: h.q } },
+        const li = el('li', { id: 'sg-opt-' + idx, role: 'option', 'aria-selected': 'false', dataset: { hid: h.id, hq: h.q } },
                   svgEl(ICO_CLOCK, 'ico'), el('span', { class: 'q' }, markMatch(h.q, q)),
                   ago ? el('span', { class: 'ago' }, ago) : null, el('span', { class: 'act' }, fill, del));
         return li;
     });
     // при наборе — первой строкой быстрое действие «Искать …»
-    if (raw && !items.some(h => h.q === raw)) {
-        rows.unshift(el('li', { class: 'go', role: 'option', dataset: { hq: '' } },
+    if (raw && !items.some(h => h.q.toLowerCase() === q)) {
+        rows.unshift(el('li', { id: 'sg-opt-go', class: 'go', role: 'option', 'aria-selected': 'false', dataset: { hq: '' } },
                         svgEl(ICO_SEARCH, 'ico'), el('span', { class: 'q' }, 'Искать «' + raw + '»')));
     }
     ul.replaceChildren(...rows);
     const open = rows.length > 0;
     box.hidden = !open;
     inp.setAttribute('aria-expanded', String(open));
+    inp.removeAttribute('aria-activedescendant');
 }
 
 function moveSuggest(dir) {
@@ -1159,7 +1221,9 @@ function moveSuggest(dir) {
         li.classList.toggle('sel', sel);
         li.setAttribute('aria-selected', String(sel));
     });
-    lis[sugSel].scrollIntoView({ block: 'nearest' });
+    const active = lis[sugSel];
+    active.scrollIntoView({ block: 'nearest' });
+    if (active.id) searchInput()?.setAttribute('aria-activedescendant', active.id);
     return true;
 }
 
@@ -1167,21 +1231,29 @@ function hideSuggest() {
     const b = suggestBox();
     if (b && !b.hidden) {
         b.hidden = true;
-        searchInput()?.setAttribute('aria-expanded', 'false');
+        sugSel = -1;
+        const inp = searchInput();
+        if (inp) {
+            inp.setAttribute('aria-expanded', 'false');
+            inp.removeAttribute('aria-activedescendant');
+        }
     }
 }
 
-async function goSearch() {
+async function goSearch(newTab = false) {
     const inp = searchInput(); if (!inp) return;
     const raw = inp.value.trim(); if (!raw) return;
     const asUrl = normalizeUrl(raw);
     const isUrl = /^https?:\/\//i.test(raw) || (asUrl !== '' && !raw.includes(' '));
     if (!isUrl) {
-        qHistory = [{ id: String(Date.now()), q: raw }, ...qHistory.filter(h => h.q !== raw)].slice(0, HISTORY_LIMIT);
+        const low = raw.toLowerCase();
+        qHistory = [{ id: String(Date.now()), q: raw }, ...qHistory.filter(h => h.q.toLowerCase() !== low)].slice(0, HISTORY_LIMIT);
         await store.setHistory(qHistory);
     }
     hideSuggest();
-    location.href = isUrl ? asUrl : ENGINES[engine].url + encodeURIComponent(raw);
+    const targetUrl = isUrl ? asUrl : ENGINES[engine].url + encodeURIComponent(raw);
+    if (newTab) window.open(targetUrl, '_blank', 'noopener');
+    else location.href = targetUrl;
 }
 
 let searchBound = false;
@@ -1192,20 +1264,28 @@ async function initSearch(preloaded, history) {
     paintEngine();
     if (searchBound) return;
     searchBound = true;
-    $('#engine-btn')?.addEventListener('click', () => {
+    const cycleEngine = dir => {
         const keys = Object.keys(ENGINES);
-        engine = keys[(keys.indexOf(engine) + 1) % keys.length];
+        engine = keys[(keys.indexOf(engine) + dir + keys.length) % keys.length];
         store.updateSettings(st => ({ ...st, engine }));
         paintEngine();
-    });
+    };
+    const engBtn = $('#engine-btn');
+    engBtn?.addEventListener('click', e => cycleEngine(e.shiftKey ? -1 : 1));
+    engBtn?.addEventListener('contextmenu', e => { e.preventDefault(); cycleEngine(-1); });
     searchInput()?.addEventListener('input', debounce(renderSuggest, 90));
     searchInput()?.addEventListener('focus', renderSuggest);
     searchInput()?.addEventListener('keydown', e => {
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (moveSuggest(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault(); return; }
         if (e.key === 'Enter' && !e.isComposing) {
+            const newTab = e.ctrlKey || e.metaKey || e.shiftKey;
             const li = sugSel >= 0 && !suggestBox().hidden ? suggestList().children[sugSel] : null;
-            if (li) { li.click(); return; }
-            goSearch();
+            if (li) {
+                if (li.dataset.hq) e.target.value = li.dataset.hq;
+                goSearch(newTab);
+                return;
+            }
+            goSearch(newTab);
         }
         if (e.key === 'Escape') {
             const box = suggestBox();
@@ -1221,6 +1301,7 @@ async function initSearch(preloaded, history) {
     apiStorage.onChanged((changes, area) => { if (area === 'local' && changes.history) qHistory = normalizeHistory(changes.history.newValue); });
     // Делегированный обработчик кликов по suggest-list
     const sl = suggestList();
+    suggestBox()?.addEventListener('mousedown', e => e.preventDefault());
     if (sl && !sl._kbDelegated) {
         sl._kbDelegated = true;
         sl.addEventListener('click', e => {
@@ -1247,10 +1328,11 @@ async function initSearch(preloaded, history) {
                 const inp = searchInput();
                 if (inp) inp.value = li.dataset.hq;
             }
-            goSearch();
+            goSearch(e.ctrlKey || e.metaKey || e.shiftKey);
         });
     }
-    $('#search-go')?.addEventListener('click', goSearch);
+    $('#search-go')?.addEventListener('click', e => goSearch(e.ctrlKey || e.metaKey || e.shiftKey));
+    $('#search-go')?.addEventListener('auxclick', e => { if (e.button === 1) { e.preventDefault(); goSearch(true); } });
     $('#clear-history')?.addEventListener('click', async () => { qHistory = []; await store.setHistory([]); renderSuggest(); });
     document.addEventListener('click', e => { if (!e.target.closest('.search-row')) hideSuggest(); });
 }
@@ -1306,30 +1388,29 @@ function buildCard(cat) {
         icoNode = el('span', { class: 'cat-ico' }, cat.icon || '');
     }
 
-    const head = el('div', { class: 'cat-head' },
+    const head = el('div', { class: 'cat-head', title: 'Перетащите для сортировки • ПКМ — изменить категорию' },
                     icoNode,
                     el('span', { class: 'cat-name', title: cat.name }, cat.name),
-                    el('button', { class: 'cat-add', type: 'button', title: 'Добавить ярлык', 'aria-label': 'Добавить ярлык в «' + cat.name + '»',
-                        onclick: e => { e.stopPropagation(); openScModal(cat.id, null); } }, '＋')
+                    el('button', { class: 'cat-add', type: 'button', title: 'Добавить ярлык', 'aria-label': 'Добавить ярлык в «' + cat.name + '»' }, '＋')
     );
-    head.addEventListener('contextmenu', e => { e.preventDefault(); openCatModal(cat.id); });
-    head.addEventListener('pointerdown', e => startCatDrag(e, card, head));
     card.addEventListener('dragover', e => {
         if (!dragState || dragState.type !== 'chip') return;
         e.preventDefault(); e.dataTransfer.dropEffect = 'move';
-        card.classList.add('drag-over');
+        if (!card.classList.contains('drag-over')) card.classList.add('drag-over');
         const t = e.target.closest && e.target.closest('.chip');
-        if (dragState.lastTarget && dragState.lastTarget !== t) {
-            dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
+        if (dragState.lastTarget !== t) {
+            if (dragState.lastTarget) dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
+            dragState.lastTarget = (t && t.dataset.id !== dragState.id) ? t : null;
+            dragState.lastRect = dragState.lastTarget ? dragState.lastTarget.getBoundingClientRect() : null;
+            dragState.lastAfter = null;
         }
-        if (t && t.dataset.id !== dragState.id) {
-            const r = t.getBoundingClientRect();
-            const after = e.clientX > r.left + r.width / 2;
-            t.classList.toggle('chip-drop-after', after);
-            t.classList.toggle('chip-drop-before', !after);
-            dragState.lastTarget = t;
-        } else {
-            dragState.lastTarget = null;
+        if (dragState.lastTarget && dragState.lastRect) {
+            const after = e.clientX > dragState.lastRect.left + dragState.lastRect.width / 2;
+            if (after !== dragState.lastAfter) {
+                dragState.lastAfter = after;
+                dragState.lastTarget.classList.toggle('chip-drop-after', after);
+                dragState.lastTarget.classList.toggle('chip-drop-before', !after);
+            }
         }
     });
     card.addEventListener('dragleave', e => {
@@ -1338,6 +1419,8 @@ function buildCard(cat) {
             if (dragState?.lastTarget) {
                 dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
                 dragState.lastTarget = null;
+                dragState.lastRect = null;
+                dragState.lastAfter = null;
             }
         }
     });
@@ -1363,16 +1446,12 @@ function clearDrag() {
 }
 
 function buildChip(cat, sc) {
-    const go = newTab => {
-        const u = normalizeUrl(sc.url); if (!u) return;
-        if (newTab) window.open(u, '_blank', 'noopener'); else location.href = u;
-    };
     // draggable="true" задан явно: пустое значение атрибута (draggable: true) по спецификации означает auto, а у div это «не перетаскивается»
-    const chip = el('div', { class: 'chip', draggable: 'true', tabindex: 0, role: 'link',
+    const chip = el('div', {
+        class: 'chip', draggable: 'true', tabindex: 0, role: 'link',
         'aria-label': sc.title || sc.url || 'Ярлык',
-        onclick: e => go(e.ctrlKey || e.metaKey),
-        onauxclick: e => { if (e.button === 1) { e.preventDefault(); go(true); } },
-        onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e.ctrlKey || e.metaKey); } } });
+        dataset: { id: sc.id, url: sc.url || '' }
+    });
     let ico;
     const fallbackChar = ((sc.title || '').trim()[0] || '🌐').toUpperCase();
     if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:'))) {
@@ -1391,16 +1470,6 @@ function buildChip(cat, sc) {
         el('div', { class: 'chip-ico' }, ico),
         el('div', { class: 'chip-name', title: sc.title }, sc.title)
     );
-    chip.dataset.id = sc.id;
-    chip.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); openScModal(cat.id, sc.id); });
-    chip.addEventListener('dragstart', e => {
-        e.stopPropagation();
-        dragState = { type: 'chip', catId: cat.id, id: sc.id };
-        e.dataTransfer.setData('text/plain', 'chip');
-        e.dataTransfer.effectAllowed = 'move';
-        setTimeout(() => chip.classList.add('dragging'), 0); // не менять DOM синхронно: Chrome может отменить drag
-    });
-    chip.addEventListener('dragend', clearDrag);
     return chip;
 }
 
@@ -1497,11 +1566,13 @@ function startCatDrag(e, card, head) {
     };
 
     const onKey = ev => { if (ev.key === 'Escape') end({ pointerId: pid }, true); };
+    const onBlur = () => end({ pointerId: pid }, true);
     const end = (ev, cancel) => {
         if (ev.pointerId !== pid) return;
         ended = true;
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         window.removeEventListener('keydown', onKey);
+        window.removeEventListener('blur', onBlur);
         head.removeEventListener('pointermove', move);
         head.removeEventListener('pointerup', up);
         head.removeEventListener('pointercancel', cancelUp);
@@ -1529,6 +1600,7 @@ function startCatDrag(e, card, head) {
     };
     const up = ev => end(ev, false), cancelUp = ev => end(ev, true);
     window.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onBlur);
     head.addEventListener('pointermove', move);
     head.addEventListener('pointerup', up);
     head.addEventListener('pointercancel', cancelUp);
@@ -1539,6 +1611,7 @@ function updateIconPreview(iconValue, urlValue) {
     const hint = $('#sc-icon-hint');
     if (!preview) return;
 
+    preview.onerror = () => { preview.hidden = true; };
     if (iconValue && (/^https?:/.test(iconValue) || iconValue.startsWith('data:'))) {
         preview.src = iconValue;
         preview.hidden = false;
@@ -1613,14 +1686,22 @@ function bindScModal() {
     form.addEventListener('submit', e => {
         e.preventDefault();
         const cat = categories.find(c => c.id === scModal.catId); if (!cat) return;
+        const normUrl = normalizeUrl($('#sc-url')?.value);
+        // нераспознанный адрес раньше сохранялся «как есть», и плитка молча не открывалась
+        if (!normUrl) { toast('Не похоже на адрес сайта. Пример: example.com', 'error'); return; }
+        let title = ($('#sc-name')?.value || '').trim();
+        if (!title) {
+            try {
+                const h = new URL(normUrl).hostname.replace(/^www\./i, '');
+                title = (h.split('.')[0] || h);
+                title = title.charAt(0).toUpperCase() + title.slice(1);
+            } catch { title = normUrl; }
+        }
         const data = {
-            title: ($('#sc-name')?.value || '').trim(),
-            url: normalizeUrl($('#sc-url')?.value),
+            title,
+            url: normUrl,
             icon: ($('#sc-icon')?.value || '').trim()
         };
-        if (!data.title) return;
-        // нераспознанный адрес раньше сохранялся «как есть», и плитка молча не открывалась
-        if (!data.url) { toast('Не похоже на адрес сайта. Пример: example.com', 'error'); return; }
         if (scModal.scId) {
             const sc = cat.shortcuts.find(x => x.id === scModal.scId);
             if (sc) Object.assign(sc, data);
@@ -1679,10 +1760,79 @@ function openCatModal(id) {
     toggleOverlay($('#cat-modal'), true, '#cat-name');
 }
 
+function openChipUrl(chip, newTab) {
+    const u = normalizeUrl(chip.dataset.url);
+    if (!u) return;
+    if (newTab) window.open(u, '_blank', 'noopener');
+    else location.href = u;
+}
+
 let catModalBound = false;
 function bindCatModal() {
     if (catModalBound) return;
     catModalBound = true;
+    const wrap = $('#cats');
+    if (wrap) {
+        wrap.addEventListener('click', e => {
+            const addBtn = e.target.closest('.cat-add');
+            if (addBtn) {
+                e.stopPropagation();
+                const card = addBtn.closest('.cat-card');
+                if (card) openScModal(card.dataset.id, null);
+                return;
+            }
+            const chip = e.target.closest('.chip');
+            if (chip) openChipUrl(chip, e.ctrlKey || e.metaKey || e.shiftKey);
+        });
+        wrap.addEventListener('auxclick', e => {
+            if (e.button !== 1) return;
+            const chip = e.target.closest('.chip');
+            if (chip) { e.preventDefault(); openChipUrl(chip, true); }
+        });
+        wrap.addEventListener('keydown', e => {
+            const chip = e.target.closest('.chip');
+            if (!chip) return;
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                openChipUrl(chip, e.ctrlKey || e.metaKey || e.shiftKey);
+            }
+        });
+        wrap.addEventListener('contextmenu', e => {
+            const chip = e.target.closest('.chip');
+            if (chip) {
+                e.preventDefault(); e.stopPropagation();
+                const card = chip.closest('.cat-card');
+                if (card) openScModal(card.dataset.id, chip.dataset.id);
+                return;
+            }
+            const head = e.target.closest('.cat-head');
+            if (head) {
+                e.preventDefault();
+                const card = head.closest('.cat-card');
+                if (card) openCatModal(card.dataset.id);
+            }
+        });
+        wrap.addEventListener('pointerdown', e => {
+            const head = e.target.closest('.cat-head');
+            if (!head) return;
+            const card = head.closest('.cat-card');
+            if (card) startCatDrag(e, card, head);
+        });
+        wrap.addEventListener('dragstart', e => {
+            const chip = e.target.closest('.chip');
+            if (!chip) return;
+            const card = chip.closest('.cat-card');
+            if (!card) return;
+            e.stopPropagation();
+            dragState = { type: 'chip', catId: card.dataset.id, id: chip.dataset.id };
+            e.dataTransfer.setData('text/plain', 'chip');
+            e.dataTransfer.effectAllowed = 'move';
+            setTimeout(() => chip.classList.add('dragging'), 0);
+        });
+        wrap.addEventListener('dragend', e => {
+            if (e.target.closest('.chip')) clearDrag();
+        });
+    }
     $('#add-cat')?.addEventListener('click', () => openCatModal(null));
     $('#cat-form')?.addEventListener('submit', e => {
         e.preventDefault();
@@ -1736,7 +1886,8 @@ function downscaleImage(file, max = 256) {
                 ctx.imageSmoothingEnabled = true;
                 ctx.imageSmoothingQuality = 'high';
                 ctx.drawImage(img, 0, 0, w, h);
-                resolve(canvas.toDataURL('image/webp', 0.9) || canvas.toDataURL('image/png'));
+                const webp = canvas.toDataURL('image/webp', 0.9);
+                resolve(webp && webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/png'));
             } catch (err) { reject(err); }
             finally { URL.revokeObjectURL(url); }
         };
@@ -1924,7 +2075,8 @@ function bindSettings() {
         ov.addEventListener('click', e => { if (e.target === ov) toggleOverlay(ov, false); });
         ov.addEventListener('keydown', e => {
             if (e.key !== 'Tab') return;
-            const focusables = ov.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+            const focusables = [...ov.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+                .filter(el => !el.hidden && el.offsetParent !== null);
             if (!focusables.length) return;
             const first = focusables[0];
             const last = focusables[focusables.length - 1];
@@ -1981,7 +2133,8 @@ function bindSettings() {
         const f = e.target.files[0]; if (!f) return;
         try {
             const type = f.type.indexOf('video') === 0 ? 'video' : 'image';
-            await mediaPut(MEDIA_KEY, f);
+            const mediaBlob = type === 'image' ? await compressImageBlob(f, 2560) : f;
+            await mediaPut(MEDIA_KEY, mediaBlob);
             await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
             val('set-bg-type', type); val('set-bg-url', '');
             await applyBackground(); toast('Фон обновлён');
@@ -2032,8 +2185,16 @@ function bindSettings() {
     bindSlider('set-ls-sub', 'font.subtitleSpacing', 'set-ls-sub-val', 'em', 0.01);
     on('set-animations', 'change', e => updateAppearanceSetting('animations', e.target.checked));
     bindSlider('set-transition-speed', 'transitionSpeed', 'set-transition-speed-val', 's', 0.01);
-    // заливка трека для всех слайдеров окна настроек одним делегированным обработчиком
-    document.getElementById('settings-overlay')?.addEventListener('input', e => { if (e.target.type === 'range') paintRange(e.target); });
+    // заливка трека для всех слайдеров окна настроек одним делегированным обработчиком + двойной клик для сброса к дефолту
+    const setOv = document.getElementById('settings-overlay');
+    setOv?.addEventListener('input', e => { if (e.target.type === 'range') paintRange(e.target); });
+    setOv?.addEventListener('dblclick', e => {
+        if (e.target.type === 'range' && e.target.defaultValue !== '') {
+            e.target.value = e.target.defaultValue;
+            paintRange(e.target);
+            e.target.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+    });
 
     on('set-custom-color', 'input', debounce(e => {
         const hex = e.target.value;
@@ -2042,6 +2203,10 @@ function bindSettings() {
     }, 80));
     on('set-custom-hex', 'change', e => {
         let hex = e.target.value.trim();
+        if (/^#?[0-9a-fA-F]{3}$/.test(hex)) {
+            const h = hex.replace('#', '');
+            hex = '#' + h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+        }
         if (!/^#?[0-9a-fA-F]{6}$/.test(hex)) { toast('HEX вида #rrggbb', 'error'); return; }
         if (hex[0] !== '#') hex = '#' + hex;
         hex = hex.toLowerCase();
@@ -2121,7 +2286,7 @@ function bindKeys() {
     if (keysBound) return;
     keysBound = true;
     document.addEventListener('keydown', e => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchInput()?.focus(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); const inp = searchInput(); if (inp) { inp.focus(); inp.select(); } return; }
         if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); return; }
         if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             const tag = document.activeElement?.tagName;

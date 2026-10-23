@@ -1,7 +1,17 @@
 const api = typeof browser !== 'undefined' ? browser : chrome;
 
 const KOCH_NEW_TAB_URL = api.runtime.getURL('newtab.html');
-const STARTUP_PAGE_URLS = new Set(['about:home', 'about:newtab', 'about:welcome', 'about:blank']);
+const STARTUP_PAGE_URLS = new Set([
+  'about:home',
+  'about:newtab',
+  'about:welcome',
+  'about:blank',
+  'chrome://newtab/',
+  'chrome://new-tab-page/',
+  'edge://newtab/',
+  'brave://newtab/',
+  'vivaldi://newtab/'
+]);
 const STARTUP_BLANK_DELAY = 1200;
 
 const startupCandidates = new Map();
@@ -87,7 +97,7 @@ async function replaceStartupCandidate(tabId) {
 }
 
 function registerStartupCandidate(tab) {
-  if (!tab || !tab.id || !STARTUP_PAGE_URLS.has(tab.url || '')) return;
+  if (!tab || typeof tab.id !== 'number' || tab.pinned || !STARTUP_PAGE_URLS.has(tab.url || '')) return;
 
   const prev = startupCandidates.get(tab.id);
   if (prev) clearTimeout(prev.timer);
@@ -104,8 +114,9 @@ api.runtime.onStartup.addListener(async () => {
 
   try {
     const windows = await api.windows.getAll({ populate: true, windowTypes: ['normal'] });
-    const win = windows?.find(w => w.focused) || windows?.[0];
-    for (const tab of win?.tabs || []) registerStartupCandidate(tab);
+    for (const win of windows || []) {
+      for (const tab of win?.tabs || []) registerStartupCandidate(tab);
+    }
   } catch (err) {
     console.error('[KOCH] Startup error:', err);
   } finally {
