@@ -97,10 +97,18 @@ function faviconOf(url) {
 function normalizeUrl(str) {
     str = (str || '').trim();
     if (!str) return '';
-    if (/^https?:\/\//i.test(str)) return str;
-    if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?([\/?#]|$)/i.test(str)) return 'http://' + str;
-    // домен вида name.tld: зона обязана начинаться с буквы (поддерживаются и IDN, например .рф)
-    if (!/\s/.test(str) && /^[^\s\/?#]+\.\p{L}[\p{L}\d-]*(?::\d+)?(?:[\/?#]|$)/u.test(str)) return 'https://' + str;
+    try {
+        if (/^https?:\/\//i.test(str)) {
+            const u = new URL(str);
+            return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname ? str : '';
+        }
+        if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?([\/?#]|$)/i.test(str)) return 'http://' + str;
+        // домен вида name.tld: зона обязана начинаться с буквы (поддерживаются и IDN, например .рф)
+        if (!/\s/.test(str) && /^[^\s\/?#]+\.\p{L}[\p{L}\d-]*(?::\d+)?(?:[\/?#]|$)/u.test(str)) {
+            const u = new URL('https://' + str);
+            return u.hostname ? 'https://' + str : '';
+        }
+    } catch { return ''; }
     return '';
 }
 
@@ -443,9 +451,8 @@ async function exportMedia() {
     const list = [];
     try {
         for (const key of await mediaKeys()) {
-            let blob = await mediaGet(key);
+            const blob = await mediaGet(key);
             if (!blob) continue;
-            if (blob.type && blob.type.startsWith('image/')) blob = await compressImageBlob(blob);
             list.push({ id: key, mime: blob.type || '', size: blob.size || 0, data: await blobToBase64(blob) });
         }
     } catch (err) { console.warn('[KOCH] exportMedia:', err); }
@@ -723,9 +730,6 @@ async function applyBackgroundNow(preloaded) {
     if (!v || !i) return;
 
     const root = document.documentElement;
-    const isMedia = bg.type === 'video' || bg.type === 'image';
-    // классы СРАЗУ, до асинхронного чтения из IndexedDB
-    root.classList.toggle('no-bg', !(isMedia && (bg.url || bg.idb)));
     let url = (bg.type !== 'none') ? (bg.url || '') : '';
     let sig = url ? 'url:' + url : '';
     if (bg.type !== 'none' && bg.idb) {
@@ -745,7 +749,8 @@ async function applyBackgroundNow(preloaded) {
     document.documentElement.style.setProperty('--bg-opacity', op);
 
     // Размытие «стекла» нужно только поверх картинки/видео; на однотонном фоне оно ничего не меняет, но стоит GPU на каждом кадре hover-анимаций.
-    document.documentElement.classList.toggle('no-bg', !((bg.type === 'video' || bg.type === 'image') && url));
+    const hasMedia = (bg.type === 'video' || bg.type === 'image') && url;
+    root.classList.toggle('no-bg', !hasMedia);
     if (bg.type === 'video' && url) {
         i.hidden = true; v.hidden = false;
         document.documentElement.classList.remove('img-bg');
@@ -891,7 +896,8 @@ async function weather(lat, lon) {
     const key = lat + ',' + lon, c = wxStore.wx(key);
     if (c && Date.now() - c.at < WX_FRESH) return c;
     const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&timezone=auto`);
-    const w = { t: Math.round(d.current.temperature_2m), code: d.current.weather_code, at: Date.now() };
+    if (d?.current?.temperature_2m == null) throw new Error('Weather data unavailable');
+    const w = { t: Math.round(d.current.temperature_2m), code: d.current.weather_code ?? 0, at: Date.now() };
     wxStore.setWx(key, w);
     return w;
 }
@@ -920,9 +926,16 @@ function tick() {
         let text;
         try {
             if (!s.fmt) {
-                s.fmt = new Intl.DateTimeFormat('ru-RU', {
-                    hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: s.tz || undefined
-                });
+                try {
+                    s.fmt = new Intl.DateTimeFormat('ru-RU', {
+                        hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: s.tz || undefined
+                    });
+                } catch {
+                    s.tz = null;
+                    s.fmt = new Intl.DateTimeFormat('ru-RU', {
+                        hour: '2-digit', minute: '2-digit', second: '2-digit'
+                    });
+                }
             }
             text = s.fmt.format(now);
         } catch { s.fmt = null; text = now.toLocaleTimeString('ru-RU'); }
@@ -970,6 +983,7 @@ window.addEventListener('online', () => { wxRetryN = 0; if (clocksReady && isPag
 function stopClockTimers() {
     if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
     if (wxTimer) { clearInterval(wxTimer); wxTimer = null; }
+    if (wxRetryT) { clearTimeout(wxRetryT); wxRetryT = null; }
 }
 
 function startClockTimers() {
@@ -1090,20 +1104,15 @@ function renderSuggest() {
     const rows = items.map(h => {
         const ago = agoLabel(h.id);
         const fill = svgEl(ICO_FILL, '', 'Вставить в поле');
-        fill.addEventListener('click', e => { e.stopPropagation(); inp.value = h.q; inp.focus(); renderSuggest(); });
         const del = svgEl(ICO_X, 'del', 'Удалить');
-        del.addEventListener('click', e => {
-            e.stopPropagation();
-            qHistory = qHistory.filter(x => x.id !== h.id);
-            store.setHistory(qHistory); renderSuggest();
-        });
-        return el('li', { role: 'option', onclick: () => { inp.value = h.q; goSearch(); } },
+        const li = el('li', { role: 'option', dataset: { hid: h.id, hq: h.q } },
                   svgEl(ICO_CLOCK, 'ico'), el('span', { class: 'q' }, markMatch(h.q, q)),
                   ago ? el('span', { class: 'ago' }, ago) : null, el('span', { class: 'act' }, fill, del));
+        return li;
     });
     // при наборе — первой строкой быстрое действие «Искать …»
     if (raw && !items.some(h => h.q === raw)) {
-        rows.unshift(el('li', { class: 'go', role: 'option', onclick: goSearch },
+        rows.unshift(el('li', { class: 'go', role: 'option', dataset: { hq: '' } },
                         svgEl(ICO_SEARCH, 'ico'), el('span', { class: 'q' }, 'Искать «' + raw + '»')));
     }
     ul.replaceChildren(...rows);
@@ -1134,11 +1143,14 @@ async function goSearch() {
     location.href = isUrl ? asUrl : ENGINES[engine].url + encodeURIComponent(raw);
 }
 
+let searchBound = false;
 async function initSearch(preloaded, history) {
     const s = preloaded || await store.getSettings();
     engine = ENGINES[s.engine] ? s.engine : 'google';
     qHistory = history || await store.getHistory();
     paintEngine();
+    if (searchBound) return;
+    searchBound = true;
     $('#engine-btn')?.addEventListener('click', () => {
         const keys = Object.keys(ENGINES);
         engine = keys[(keys.indexOf(engine) + 1) % keys.length];
@@ -1154,10 +1166,49 @@ async function initSearch(preloaded, history) {
             if (li) { li.click(); return; }
             goSearch();
         }
-        if (e.key === 'Escape') hideSuggest();
+        if (e.key === 'Escape') {
+            const box = suggestBox();
+            if (box && !box.hidden) {
+                hideSuggest();
+            } else if (e.target.value) {
+                e.target.value = '';
+                renderSuggest();
+            }
+        }
     });
     // История общая для всех открытых вкладок: без этого вкладка со старой копией затирает чужие запросы
     apiStorage.onChanged((changes, area) => { if (area === 'local' && changes.history) qHistory = normalizeHistory(changes.history.newValue); });
+    // Делегированный обработчик кликов по suggest-list
+    const sl = suggestList();
+    if (sl && !sl._kbDelegated) {
+        sl._kbDelegated = true;
+        sl.addEventListener('click', e => {
+            const li = e.target.closest('li');
+            if (!li) return;
+            // кнопка «вставить»
+            if (e.target.closest('[title="Вставить в поле"]')) {
+                e.stopPropagation();
+                const inp = searchInput();
+                if (inp && li.dataset.hq) { inp.value = li.dataset.hq; inp.focus(); renderSuggest(); }
+                return;
+            }
+            // кнопка «удалить»
+            if (e.target.closest('.del')) {
+                e.stopPropagation();
+                if (li.dataset.hid) {
+                    qHistory = qHistory.filter(x => x.id !== li.dataset.hid);
+                    store.setHistory(qHistory); renderSuggest();
+                }
+                return;
+            }
+            // клик по строке — поиск
+            if (li.dataset.hq) {
+                const inp = searchInput();
+                if (inp) inp.value = li.dataset.hq;
+            }
+            goSearch();
+        });
+    }
     $('#search-go')?.addEventListener('click', goSearch);
     $('#clear-history')?.addEventListener('click', async () => { qHistory = []; await store.setHistory([]); renderSuggest(); });
     document.addEventListener('click', e => { if (!e.target.closest('.search-row')) hideSuggest(); });
@@ -1188,10 +1239,9 @@ function renderCats(data) {
                 next = null;
                 catsSig = given ? sig : JSON.stringify(categories);
                 const wrap = $('#cats'); if (!wrap) return;
-                wrap.innerHTML = '';
                 const frag = document.createDocumentFragment();
                 categories.forEach(cat => frag.append(buildCard(cat)));
-                wrap.append(frag);
+                wrap.replaceChildren(frag);
             } while (catsDirty);
         } finally { catsBusy = false; }
     })();
@@ -1251,17 +1301,27 @@ function buildChip(cat, sc) {
     };
     // draggable="true" задан явно: пустое значение атрибута (draggable: true) по спецификации означает auto, а у div это «не перетаскивается»
     const chip = el('div', { class: 'chip', draggable: 'true', tabindex: 0, role: 'link',
+        'aria-label': sc.title || sc.url || 'Ярлык',
         onclick: e => go(e.ctrlKey || e.metaKey),
         onauxclick: e => { if (e.button === 1) go(true); },
         onkeydown: e => { if (e.key === 'Enter') go(e.ctrlKey || e.metaKey); } });
     let ico;
-    if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:')))
-        ico = el('img', { src: sc.icon, alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, ((sc.title || '').trim()[0] || '🌐').toUpperCase())) });
-    else if (sc.icon) ico = el('span', {}, sc.icon);
-    else ico = el('img', { src: faviconOf(sc.url), alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, ((sc.title || '').trim()[0] || '🌐').toUpperCase())) });
+    const fallbackChar = ((sc.title || '').trim()[0] || '🌐').toUpperCase();
+    if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:'))) {
+        ico = el('img', { src: sc.icon, alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, fallbackChar)) });
+    } else if (sc.icon) {
+        ico = el('span', {}, sc.icon);
+    } else {
+        const fav = faviconOf(sc.url);
+        if (fav) {
+            ico = el('img', { src: fav, alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, fallbackChar)) });
+        } else {
+            ico = el('span', {}, fallbackChar);
+        }
+    }
     chip.append(
         el('div', { class: 'chip-ico' }, ico),
-                el('div', { class: 'chip-name', title: sc.title }, sc.title)
+        el('div', { class: 'chip-name', title: sc.title }, sc.title)
     );
     chip.dataset.id = sc.id;
     chip.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); openScModal(cat.id, sc.id); });
@@ -1349,9 +1409,11 @@ function startCatDrag(e, card, head) {
         flipReorder(wrap, () => (ph.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING) ? t.after(ph) : t.before(ph));
     };
 
+    const onKey = ev => { if (ev.key === 'Escape') end({ pointerId: pid }, true); };
     const end = (ev, cancel) => {
         if (ev.pointerId !== pid) return;
         ended = true;
+        window.removeEventListener('keydown', onKey);
         head.removeEventListener('pointermove', move);
         head.removeEventListener('pointerup', up);
         head.removeEventListener('pointercancel', cancelUp);
@@ -1361,7 +1423,7 @@ function startCatDrag(e, card, head) {
         const from = card.getBoundingClientRect();
         for (const p of ['position', 'left', 'top', 'width', 'height', 'zIndex', 'pointerEvents', 'margin']) card.style[p] = '';
         card.classList.remove('dragging');
-        if (cancel) { ph.remove(); return; }
+        if (cancel) { ph.replaceWith(card); return; }
         ph.replaceWith(card);
         const to = card.getBoundingClientRect();
         card.animate([{ transform: `translate(${from.left - to.left}px,${from.top - to.top}px)` }, { transform: 'none' }],
@@ -1371,6 +1433,7 @@ function startCatDrag(e, card, head) {
         if (next.length === categories.length && next.some((c, i) => c !== categories[i])) { categories = next; saveCats(); }
     };
     const up = ev => end(ev, false), cancelUp = ev => end(ev, true);
+    window.addEventListener('keydown', onKey);
     head.addEventListener('pointermove', move);
     head.addEventListener('pointerup', up);
     head.addEventListener('pointercancel', cancelUp);
@@ -1447,7 +1510,10 @@ const closeOverlays = () => document.querySelectorAll('.overlay:not([hidden])').
 
 function closeScModal() { toggleOverlay($('#sc-modal'), false); scModal = { catId: null, scId: null }; }
 
+let scModalBound = false;
 function bindScModal() {
+    if (scModalBound) return;
+    scModalBound = true;
     const form = $('#sc-form'); if (!form) return;
     form.addEventListener('submit', e => {
         e.preventDefault();
@@ -1516,7 +1582,10 @@ function openCatModal(id) {
     toggleOverlay($('#cat-modal'), true, '#cat-name');
 }
 
+let catModalBound = false;
 function bindCatModal() {
+    if (catModalBound) return;
+    catModalBound = true;
     $('#add-cat')?.addEventListener('click', () => openCatModal(null));
     $('#cat-form')?.addEventListener('submit', e => {
         e.preventDefault();
@@ -1611,11 +1680,18 @@ function bindSlider(inputId, path, valueId, suffix, step = 1) {
     });
 }
 
-function paintAvatar(url) {
+function paintAvatar(url, title = '') {
     const img = document.getElementById('avatar-img'), fb = document.getElementById('avatar-fallback');
     if (!img || !fb) return;
-    if (url) { img.src = url; img.hidden = false; fb.hidden = true; }
-    else { img.hidden = true; fb.hidden = false; }
+    img.onerror = () => { img.hidden = true; fb.hidden = false; };
+    if (url) {
+        img.src = url; img.hidden = false; fb.hidden = true;
+    } else {
+        img.hidden = true;
+        fb.hidden = false;
+        const char = (title || document.getElementById('main-title')?.textContent || 'K').trim()[0] || 'K';
+        fb.textContent = char.toUpperCase();
+    }
 }
 
 function invalidateRuntimeState() {
@@ -1687,7 +1763,7 @@ async function applyEverything() {
     await applyBackground(s);
     paintTitle(s);
     const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
-    paintAvatar(s.avatar || '');
+    paintAvatar(s.avatar || '', s.title);
     initThemeSelector(s.theme);
     qHistory = await store.getHistory();
     paintEngine();
@@ -1697,10 +1773,27 @@ async function applyEverything() {
     syncSettingsUI(s);
 }
 
+let settingsBound = false;
 function bindSettings() {
+    if (settingsBound) return;
+    settingsBound = true;
     on('settings-btn', 'click', openSettings);
     document.querySelectorAll('.overlay').forEach(ov => {
         ov.addEventListener('click', e => { if (e.target === ov) toggleOverlay(ov, false); });
+        ov.addEventListener('keydown', e => {
+            if (e.key !== 'Tab') return;
+            const focusables = ov.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+            if (!focusables.length) return;
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        });
     });
     document.querySelectorAll('[data-close]').forEach(b => {
         b.addEventListener('click', () => toggleOverlay(document.getElementById(b.getAttribute('data-close')), false));
@@ -1811,19 +1904,11 @@ function bindSettings() {
     /* ====== ЭКСПОРТ: всегда полный профиль (настройки, категории, картинки, история, фон) ====== */
     on('export-btn', 'click', async () => {
         try {
-            let mediaBytes = 0;
-            for (const key of await mediaKeys().catch(() => [])) mediaBytes += (await mediaGet(key).catch(() => null))?.size || 0;
-            const mediaMB = mediaBytes / 1048576;
-            // файл фона в base64 раздувается на треть; для очень тяжёлых видео спрашиваем
-            let includeMedia = true;
-            if (mediaMB > 30) {
-                includeMedia = confirm(`Фоновый файл весит ~${mediaMB.toFixed(0)} МБ, экспорт получится очень большим.\n\nОК — экспортировать вместе с фоном\nОтмена — без файла фона (всё остальное сохранится)`);
-            }
-            const json = await store.exportAll({ includeMedia });
+            const json = await store.exportAll({ includeMedia: true });
             const blob = new Blob([json], { type: 'application/json' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `koch-brauzer-${includeMedia ? 'full' : 'no-bg'}-${new Date().toISOString().slice(0, 10)}.json`;
+            a.download = `koch-brauzer-full-${new Date().toISOString().slice(0, 10)}.json`;
             a.click();
             setTimeout(() => URL.revokeObjectURL(a.href), 10000);
             const kb = Math.round(blob.size / 1024);
@@ -1859,7 +1944,7 @@ function bindSettings() {
     });
 }
 
-function setSlider(inputId, value, valueId, suffix) { val(inputId, value); txt(valueId, value + suffix); }
+function setSlider(inputId, value, valueId, suffix) { val(inputId, value); txt(valueId, (typeof value === 'number' && value % 1 !== 0 ? value.toFixed(2) : value) + suffix); }
 
 async function openSettings() {
     syncSettingsUI(await store.getSettings());
@@ -1882,11 +1967,17 @@ function initThemeSelector(cur) {
     sel.value = cur;
 }
 
+let keysBound = false;
 function bindKeys() {
+    if (keysBound) return;
+    keysBound = true;
     document.addEventListener('keydown', e => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchInput()?.focus(); }
         if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
-        if (e.key === 'Escape') closeOverlays();
+        if (e.key === 'Escape') {
+            closeOverlays();
+            hideSuggest();
+        }
     });
 }
 
@@ -1900,7 +1991,7 @@ async function boot() {
         applyAppearance(s.appearance);
         paintTitle(s);
         const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
-        paintAvatar(s.avatar || '');
+        paintAvatar(s.avatar || '', s.title);
         initThemeSelector(s.theme);
 
         setupVideoVisibility();
@@ -1925,7 +2016,7 @@ async function boot() {
             if (JSON.stringify(next.bg || {}) !== bgAppliedSig) await applyBackground(next);
             paintTitle(next);
             if (sub) sub.textContent = next.subtitle || '';
-            paintAvatar(next.avatar || '');
+            paintAvatar(next.avatar || '', next.title);
             if (ENGINES[next.engine] && next.engine !== engine) { engine = next.engine; paintEngine(); }
             const sel = $('#theme-select'); if (sel) sel.value = next.theme || 'rose';
             if (JSON.stringify(next.cities || []) !== clockCitiesSig) initClocks(next);
