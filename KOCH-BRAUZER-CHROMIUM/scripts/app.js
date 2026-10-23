@@ -87,14 +87,9 @@ function toast(msg, type = 'info') {
     setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, 2600);
 }
 
-const hasChromeFavicon = isExt && typeof browser === 'undefined' && typeof chrome !== 'undefined' && !!chrome.runtime?.getURL;
 function faviconOf(url) {
     try {
         const u = new URL(/^https?:\/\//i.test(url) ? url : 'https://' + url);
-        if (!u.hostname) return '';
-        if (hasChromeFavicon) {
-            return `${chrome.runtime.getURL('/_favicon/')}?pageUrl=${encodeURIComponent(u.href)}&size=64`;
-        }
         return `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=64`;
     } catch { return ''; }
 }
@@ -538,19 +533,22 @@ const store = {
 
     async exportAll(opts = {}) {
         const { includeMedia = true } = opts;
+        await this._q;
         const data = await apiStorage.get(['settings', 'categories', 'history']);
+        const settings = normalizeSettings(data.settings);
         const cats = data.categories || clone(DEFAULT_CATEGORIES);
+        const media = (includeMedia && settings.bg?.idb) ? (await exportMedia()).filter(m => m.id === settings.bg.idb) : (includeMedia ? await exportMedia() : []);
 
         const profile = {
             format: 'koch-brauzer-profile',
-                version: PROFILE_FORMAT_VERSION,
-                exportedAt: new Date().toISOString(),
-                profile: {
-                    settings: normalizeSettings(data.settings),
-                    categories: normalizeCategories(cats),
-                    history: normalizeHistory(data.history),
-                    media: includeMedia ? await exportMedia() : []
-                }
+            version: PROFILE_FORMAT_VERSION,
+            exportedAt: new Date().toISOString(),
+            profile: {
+                settings,
+                categories: normalizeCategories(cats),
+                history: normalizeHistory(data.history),
+                media
+            }
         };
         return JSON.stringify(profile);
     },
@@ -560,18 +558,24 @@ const store = {
         try { data = JSON.parse(json); } catch { throw new Error('Невалидный JSON'); }
         if (!data || typeof data !== 'object') throw new Error('Файл не похож на бэкап');
 
+        await this._q;
         const migrated = migrateBackup(data);
 
         if (migrated.media.length > 0) await importMedia(migrated.media);
 
         const bg = migrated.settings?.bg;
-        if (bg?.idb && !migrated.media.some(m => m.id === bg.idb) && !(await mediaGet(bg.idb).catch(() => null))) {
-            bg.idb = '';
-            if (!bg.url) bg.type = 'none';
+        if (bg) {
+            if (!bg.idb) {
+                try { for (const k of await mediaKeys()) await mediaDel(k); } catch {}
+            } else if (!migrated.media.some(m => m.id === bg.idb) && !(await mediaGet(bg.idb).catch(() => null))) {
+                bg.idb = '';
+                if (!bg.url) bg.type = 'none';
+            }
         }
 
         const next = { schemaVersion: CURRENT_SCHEMA };
         for (const k of ['settings', 'categories', 'history']) if (migrated[k]) next[k] = migrated[k];
+        if (migrated.settings) this.sig = JSON.stringify(migrated.settings);
         await apiStorage.set(next);
         settingsCache = null;
         return migrated;
@@ -594,18 +598,18 @@ function applyCustomThemeVars(hex) {
     const cl = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
 
     const S = cl(s, 30, 90);
-    const L = cl(l, 20, 78);
-    const d = cl(L, 25, 65) / 60;
+    const L = cl(l, 15, 85);
+    const d = L / 60;
 
-    const bg      = hslHex(h, S * 0.55, cl(4 * d, 3, 12));
-    const panel   = hslHex(h, S * 0.60, cl(8 * d, 5, 18));
-    const card    = hslHex(h, S * 0.60, cl(11 * d, 7, 24));
-    const card2   = hslHex(h, S * 0.60, cl(15 * d, 10, 30));
-    const accent  = hslHex(h, S, cl(l, 42, 72));
-    const accent2 = hslHex(h, cl(S, 45, 92), cl(L + 16, 60, 86));
-    const yellow  = hslHex((h + 48) % 360, 82, 72);
-    const text    = hslHex(h, S * 0.25, 95);
-    const muted   = hslHex(h, S * 0.42, cl(L * 0.65 + 24, 52, 74));
+    const bg      = hslHex(h, S * 0.55, cl(4 * d, 2, 12));
+    const panel   = hslHex(h, S * 0.60, cl(8 * d, 4, 20));
+    const card    = hslHex(h, S * 0.60, cl(11 * d, 6, 26));
+    const card2   = hslHex(h, S * 0.60, cl(15 * d, 9, 32));
+    const accent  = clean;
+    const accent2 = hslHex(h, cl(S, 45, 92), cl(L + 16, 58, 88));
+    const yellow  = hslHex((h + 50) % 360, 78, 72);
+    const text    = hslHex(h, S * 0.28, 94);
+    const muted   = hslHex(h, S * 0.45, cl(L * 0.75 + 22, 52, 74));
 
     const st = document.documentElement.style;
     st.setProperty('--bg', bg);
@@ -634,13 +638,14 @@ async function applyTheme(id, persist = true) {
     if (id === appliedTheme && !persist) return;
     appliedTheme = id;
     document.body.dataset.theme = id;
+    const p = persist ? store.updateSettings(s => ({ ...s, theme: id })) : null;
     if (id === 'custom') {
-        const s = await store.getSettings();
+        const s = await (p || store.getSettings());
         if (appliedTheme === id) applyCustomThemeVars(s.customColor || '#ff4fa3');   // за время await тему могли сменить
     } else {
         clearCustomThemeVars();
+        if (p) await p;
     }
-    if (persist) await store.updateSettings(s => ({ ...s, theme: id }));
 }
 
 function applyAppearance(app) {
@@ -690,7 +695,7 @@ let bgVideoUrl = '';
 let bgAppliedSig = '';   // JSON применённого фона: по нему sync решает, нужно ли перечитывать медиа
 let pageGone = false;
 
-/* Страница «живая», только если вкладка видима и не выгружена. */
+/* Страница «живая», только если вкладка видима и окно не свёрнуто. */
 const isPageActive = () => !document.hidden && !pageGone;
 
 function applyBackground(preloaded) {
@@ -757,7 +762,8 @@ async function applyBackgroundNow(preloaded) {
     const hasMedia = (bg.type === 'video' || bg.type === 'image') && url;
     root.classList.toggle('no-bg', !hasMedia);
     if (bg.type === 'video' && url) {
-        i.hidden = true; v.hidden = false;
+        i.hidden = true; v.hidden = false; i.style.backgroundImage = '';
+        document.documentElement.style.removeProperty('--bg-img');
         document.documentElement.classList.remove('img-bg');
         v.style.opacity = op;
         bgVideoActive = true;
@@ -766,17 +772,16 @@ async function applyBackgroundNow(preloaded) {
         bgVideoActive = false; bgVideoUrl = '';
         releaseVideo(v);
         v.hidden = true; i.hidden = false;
-        const cssUrl = `url("${String(url).replace(/["\\\n\r]/g, '\\$&')}")`;
-        i.style.backgroundImage = cssUrl; i.style.opacity = op;
-        document.documentElement.style.setProperty('--bg-img', cssUrl);
+        i.style.backgroundImage = `url("${url}")`; i.style.opacity = op;
+        document.documentElement.style.setProperty('--bg-img', `url("${url}")`);
         document.documentElement.classList.add('img-bg');
     } else {
         bgVideoActive = false; bgVideoUrl = '';
         releaseVideo(v);
         v.hidden = true;
         i.hidden = true; i.style.backgroundImage = '';
+        document.documentElement.style.removeProperty('--bg-img');
         document.documentElement.classList.remove('img-bg');
-       
     }
     syncVideoPlayback();
 }
@@ -812,9 +817,11 @@ function setupVideoVisibility() {
 function paintTitle(s) {
     const t = document.getElementById('main-title');
     if (!t) return;
-    const raw = (s.title || 'KOCH BRAUZER').trim();
+    const raw = (s.title || 'KOCH BRAUZER').trim() || 'KOCH BRAUZER';
     t.textContent = raw;
-    document.title = raw || 'KOCH BRAUZER';
+    document.title = raw;
+    const fb = document.getElementById('avatar-fallback');
+    if (fb && !fb.hidden) fb.textContent = (raw[0] || 'K').toUpperCase();
 }
 
 async function repairBgMedia(s) {
@@ -883,21 +890,27 @@ function scheduleWxRetry() {
 }
 const wxText = w => `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
 
+const geoPending = new Map();
 async function geocode(city) {
-    city = (city || '').trim();
-    if (!city || city === '—') return null;
-    const key = city.toLowerCase();
+    const key = typeof city === 'string' ? city.trim().toLowerCase() : '';
+    if (!key || key === '—') return null;
     if (geoCache.has(key)) return geoCache.get(key);
     const saved = wxStore.geo(key) || wxStore.geo(city);
     if (saved) { geoCache.set(key, saved); return saved; }
-    try {
-        const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=ru&format=json`);
-        const g = d?.results?.[0];
-        const info = g ? { lat: g.latitude, lon: g.longitude, tz: g.timezone || null } : null;
-        geoCache.set(key, info);
-        if (info) wxStore.setGeo(key, info);
-        return info;
-    } catch { return null; } // сбой сети не кэшируем: следующая попытка повторит запрос
+    if (geoPending.has(key)) return geoPending.get(key);
+    const req = (async () => {
+        try {
+            const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city.trim())}&count=1&language=ru&format=json`);
+            const g = d?.results?.[0];
+            const info = g ? { lat: g.latitude, lon: g.longitude, tz: g.timezone || null } : null;
+            geoCache.set(key, info);
+            if (info) wxStore.setGeo(key, info);
+            return info;
+        } catch { return null; } // сбой сети не кэшируем: следующая попытка повторит запрос
+        finally { geoPending.delete(key); }
+    })();
+    geoPending.set(key, req);
+    return req;
 }
 
 async function weather(lat, lon) {
@@ -989,31 +1002,16 @@ async function refreshWeather() {
 window.addEventListener('online', () => { wxRetryN = 0; if (clocksReady && isPageActive()) refreshWeather(); });
 
 function stopClockTimers() {
-    if (tickAlignT) { clearTimeout(tickAlignT); tickAlignT = null; }
     if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
     if (wxTimer) { clearInterval(wxTimer); wxTimer = null; }
     if (wxRetryT) { clearTimeout(wxRetryT); wxRetryT = null; }
 }
 
-let tickAlignT = null;
-function scheduleAlignedTicks() {
-    if (tickAlignT) { clearTimeout(tickAlignT); tickAlignT = null; }
-    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
-    if (!isPageActive() || !clockSlots.length) return;
-    tick();
-    const delay = 1000 - (Date.now() % 1000);
-    tickAlignT = setTimeout(() => {
-        tickAlignT = null;
-        if (!isPageActive()) return;
-        tick();
-        tickTimer = setInterval(tick, 1000);
-    }, delay);
-}
-
 function startClockTimers() {
     stopClockTimers();
     if (!isPageActive() || !clockSlots.length) return;
-    scheduleAlignedTicks();
+    tick();
+    tickTimer = setInterval(tick, 1000);
     if (clocksReady) {
         wxTimer = setInterval(refreshWeather, WX_INTERVAL);
         if (wxNeedRetry || Date.now() - lastWxAt >= WX_INTERVAL) { wxRetryN = 0; refreshWeather(); }
@@ -1022,8 +1020,8 @@ function startClockTimers() {
 
 /* Пока вкладка скрыта или окно свёрнуто — таймеры часов и погоды не тикают. */
 function syncClockTimers() {
-    if (!isPageActive()) { if (tickTimer || tickAlignT || wxTimer) stopClockTimers(); }
-    else if (!tickTimer && !tickAlignT) startClockTimers();
+    if (!isPageActive()) { if (tickTimer || wxTimer) stopClockTimers(); }
+    else if (!tickTimer) startClockTimers();
 }
 
 async function initClocks(preloaded) {
@@ -1035,12 +1033,21 @@ async function initClocks(preloaded) {
     const cities = s.cities || ['—', '—'];
     clockCitiesSig = JSON.stringify(s.cities || []);
     clockSlots = [0, 1].map(i => {
-        const city = cities[i] || '—';
+        const rawCity = (cities[i] || '').trim();
+        const city = rawCity || '—';
         const nameEl = $(i === 0 ? '#city-a' : '#city-b');
+        const wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
         if (nameEl) nameEl.textContent = String(city).toUpperCase();
-        return { city, tz: null, geo: null, fmt: null, el: null };
+        const key = rawCity.toLowerCase();
+        const savedGeo = key ? (geoCache.get(key) || wxStore.geo(key) || wxStore.geo(rawCity)) : null;
+        if (wxEl) {
+            const cw = savedGeo ? wxStore.wx(savedGeo.lat + ',' + savedGeo.lon) : null;
+            wxEl.textContent = cw && Date.now() - cw.at < WX_STALE ? wxText(cw) : '—';
+        }
+        return { city, tz: savedGeo?.tz || null, geo: savedGeo || null, fmt: null, el: $(i === 0 ? '#time-a' : '#time-b') };
     });
-    scheduleAlignedTicks();
+    tick();
+    if (isPageActive()) tickTimer = setInterval(tick, 1000);
     (async () => {
         await Promise.all(clockSlots.map(async sl => {
             sl.geo = await geocode(sl.city);
@@ -1127,21 +1134,20 @@ function renderSuggest() {
         const ago = agoLabel(h.id);
         const fill = svgEl(ICO_FILL, '', 'Вставить в поле');
         const del = svgEl(ICO_X, 'del', 'Удалить');
-        const li = el('li', { role: 'option', 'aria-selected': 'false', dataset: { hid: h.id, hq: h.q } },
+        const li = el('li', { role: 'option', dataset: { hid: h.id, hq: h.q } },
                   svgEl(ICO_CLOCK, 'ico'), el('span', { class: 'q' }, markMatch(h.q, q)),
                   ago ? el('span', { class: 'ago' }, ago) : null, el('span', { class: 'act' }, fill, del));
         return li;
     });
     // при наборе — первой строкой быстрое действие «Искать …»
     if (raw && !items.some(h => h.q === raw)) {
-        rows.unshift(el('li', { class: 'go', role: 'option', 'aria-selected': 'false', dataset: { hq: '' } },
+        rows.unshift(el('li', { class: 'go', role: 'option', dataset: { hq: '' } },
                         svgEl(ICO_SEARCH, 'ico'), el('span', { class: 'q' }, 'Искать «' + raw + '»')));
     }
-    rows.forEach((li, idx) => { li.id = 'sg-opt-' + idx; });
     ul.replaceChildren(...rows);
-    box.hidden = rows.length === 0;
-    inp.setAttribute('aria-expanded', String(!box.hidden));
-    inp.removeAttribute('aria-activedescendant');
+    const open = rows.length > 0;
+    box.hidden = !open;
+    inp.setAttribute('aria-expanded', String(open));
 }
 
 function moveSuggest(dir) {
@@ -1149,19 +1155,20 @@ function moveSuggest(dir) {
     const lis = [...suggestList().children]; if (!lis.length) return false;
     sugSel = (sugSel + dir + lis.length) % lis.length;
     lis.forEach((li, i) => {
-        const active = i === sugSel;
-        li.classList.toggle('sel', active);
-        li.setAttribute('aria-selected', String(active));
+        const sel = i === sugSel;
+        li.classList.toggle('sel', sel);
+        li.setAttribute('aria-selected', String(sel));
     });
     lis[sugSel].scrollIntoView({ block: 'nearest' });
-    searchInput()?.setAttribute('aria-activedescendant', lis[sugSel].id);
     return true;
 }
 
 function hideSuggest() {
-    const b = suggestBox(); if (b) b.hidden = true;
-    const inp = searchInput();
-    if (inp) { inp.setAttribute('aria-expanded', 'false'); inp.removeAttribute('aria-activedescendant'); }
+    const b = suggestBox();
+    if (b && !b.hidden) {
+        b.hidden = true;
+        searchInput()?.setAttribute('aria-expanded', 'false');
+    }
 }
 
 async function goSearch() {
@@ -1191,19 +1198,16 @@ async function initSearch(preloaded, history) {
         store.updateSettings(st => ({ ...st, engine }));
         paintEngine();
     });
-    const debouncedSuggest = debounce(renderSuggest, 90);
-    searchInput()?.addEventListener('input', debouncedSuggest);
+    searchInput()?.addEventListener('input', debounce(renderSuggest, 90));
     searchInput()?.addEventListener('focus', renderSuggest);
     searchInput()?.addEventListener('keydown', e => {
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (moveSuggest(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault(); return; }
         if (e.key === 'Enter' && !e.isComposing) {
-            debouncedSuggest.cancel();
             const li = sugSel >= 0 && !suggestBox().hidden ? suggestList().children[sugSel] : null;
             if (li) { li.click(); return; }
             goSearch();
         }
         if (e.key === 'Escape') {
-            debouncedSuggest.cancel();
             const box = suggestBox();
             if (box && !box.hidden) {
                 hideSuggest();
@@ -1260,21 +1264,27 @@ let scModal = { catId: null, scId: null };
    которые уже на экране (catsSig), повторно не рисуются.
    Флаг catsBusy отдельный от промиса: при синхронном проходе (данные переданы, await не нужен)
    finally выполнялся ДО присвоения промиса, и «зависший» промис блокировал все последующие отрисовки. */
-let catsBusy = false, catsDirty = false, catsRun = Promise.resolve(), catsSig = '';
+let catsBusy = false, catsDirty = false, catsPending = null, catsRun = Promise.resolve(), catsSig = '';
 function renderCats(data) {
     const sig = Array.isArray(data) ? JSON.stringify(data) : null;
-    if (catsBusy) { if (sig === null || sig !== catsSig) catsDirty = true; return catsRun; }
+    if (catsBusy) {
+        if (sig === null || sig !== catsSig) {
+            catsDirty = true;
+            if (Array.isArray(data)) catsPending = { data, sig };
+        }
+        return catsRun;
+    }
     if (sig !== null && sig === catsSig) return catsRun;
     catsBusy = true;
+    if (Array.isArray(data)) catsPending = { data, sig };
     catsRun = (async () => {
         try {
-            let next = sig !== null ? data : null;
             do {
                 catsDirty = false;
-                const given = next !== null;
-                categories = next || await store.getCategories();
-                next = null;
-                catsSig = given ? sig : JSON.stringify(categories);
+                const pending = catsPending;
+                catsPending = null;
+                categories = pending ? pending.data : await store.getCategories();
+                catsSig = pending ? pending.sig : JSON.stringify(categories);
                 const wrap = $('#cats'); if (!wrap) return;
                 const frag = document.createDocumentFragment();
                 categories.forEach(cat => frag.append(buildCard(cat)));
@@ -1308,19 +1318,27 @@ function buildCard(cat) {
         if (!dragState || dragState.type !== 'chip') return;
         e.preventDefault(); e.dataTransfer.dropEffect = 'move';
         card.classList.add('drag-over');
-        const t = e.target.closest?.('.chip');
-        card.querySelectorAll('.drop-before,.drop-after').forEach(n => { if (n !== t) n.classList.remove('drop-before', 'drop-after'); });
+        const t = e.target.closest && e.target.closest('.chip');
+        if (dragState.lastTarget && dragState.lastTarget !== t) {
+            dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
+        }
         if (t && t.dataset.id !== dragState.id) {
             const r = t.getBoundingClientRect();
             const after = e.clientX > r.left + r.width / 2;
-            t.classList.toggle('drop-after', after);
-            t.classList.toggle('drop-before', !after);
+            t.classList.toggle('chip-drop-after', after);
+            t.classList.toggle('chip-drop-before', !after);
+            dragState.lastTarget = t;
+        } else {
+            dragState.lastTarget = null;
         }
     });
     card.addEventListener('dragleave', e => {
         if (!card.contains(e.relatedTarget)) {
             card.classList.remove('drag-over');
-            card.querySelectorAll('.drop-before,.drop-after').forEach(n => n.classList.remove('drop-before', 'drop-after'));
+            if (dragState?.lastTarget) {
+                dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
+                dragState.lastTarget = null;
+            }
         }
     });
     card.addEventListener('drop', e => {
@@ -1341,7 +1359,7 @@ function buildCard(cat) {
 let dragState = null;
 function clearDrag() {
     dragState = null;
-    document.querySelectorAll('.dragging,.drag-over,.drop-before,.drop-after').forEach(n => n.classList.remove('dragging', 'drag-over', 'drop-before', 'drop-after'));
+    document.querySelectorAll('.dragging,.drag-over,.chip-drop-before,.chip-drop-after').forEach(n => n.classList.remove('dragging', 'drag-over', 'chip-drop-before', 'chip-drop-after'));
 }
 
 function buildChip(cat, sc) {
@@ -1353,7 +1371,7 @@ function buildChip(cat, sc) {
     const chip = el('div', { class: 'chip', draggable: 'true', tabindex: 0, role: 'link',
         'aria-label': sc.title || sc.url || 'Ярлык',
         onclick: e => go(e.ctrlKey || e.metaKey),
-        onauxclick: e => { if (e.button === 1) go(true); },
+        onauxclick: e => { if (e.button === 1) { e.preventDefault(); go(true); } },
         onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e.ctrlKey || e.metaKey); } } });
     let ico;
     const fallbackChar = ((sc.title || '').trim()[0] || '🌐').toUpperCase();
@@ -1400,73 +1418,90 @@ function moveChip(from, scId, to, targetId, after) {
     let pos = d.shortcuts.length;
     const t = targetId ? d.shortcuts.findIndex(x => x.id === targetId) : -1;
     if (t !== -1) pos = t + (after ? 1 : 0);
-    if (from === to && pos === idx) { s.shortcuts.splice(idx, 0, sc); return; }
     d.shortcuts.splice(pos, 0, sc);
     saveCats();
 }
 
 /* Перенос категорий: карточки переставляются прямо под курсором (с плавной FLIP-анимацией),
    а порядок сохраняется один раз при отпускании. */
-function flipReorder(wrap, mutate) {
-    const cards = [...wrap.children];
+function flipReorder(wrap, mutate, skipNode) {
+    const cards = [...wrap.children].filter(c => c !== skipNode);
     const first = new Map(cards.map(c => [c, c.getBoundingClientRect()]));
     mutate();
+    const dur = animDur(180);
+    if (!dur) return;
     for (const c of cards) {
         const a = first.get(c), b = c.getBoundingClientRect();
         const dx = a.left - b.left, dy = a.top - b.top;
-        if (dx || dy) c.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: 'none' }],
-                                { duration: animDur(180), easing: EASE });
+        if (dx || dy) {
+            c.getAnimations?.().forEach(an => an.cancel());
+            c.animate([{ transform: `translate3d(${dx}px,${dy}px,0)` }, { transform: 'none' }],
+                      { duration: dur, easing: EASE });
+        }
     }
 }
 
 /* Перенос категории: тянем за шапку; под курсором — плейсхолдер, остальные карточки
-   расступаются с FLIP-анимацией, порядок сохраняется один раз при отпускании. */
+   расступаются с FLIP-анимацией, порядок сохраняется один раз при отпускании.
+   Позиционирование через transform: translate3d + requestAnimationFrame исключает layout thrashing на 240 Гц. */
 function startCatDrag(e, card, head) {
     if (e.button !== 0 || e.target.closest('button')) return;
     const wrap = card.parentElement, sx = e.clientX, sy = e.clientY, pid = e.pointerId;
-    let on = false, ph = null, grab = null, fix = null, lock = 0;
+    let on = false, ph = null, baseX = 0, baseY = 0, lock = 0, rafId = 0, lastX = sx, lastY = sy;
     let ended = false;
     try { head.setPointerCapture(pid); } catch {}
+
+    const step = () => {
+        rafId = 0;
+        if (ended || !on) return;
+        const x = lastX, y = lastY;
+        card.style.transform = `translate3d(${x - sx}px,${y - sy}px,0)`;
+        if (y < 70) window.scrollBy(0, -14); else if (y > innerHeight - 70) window.scrollBy(0, 14);
+        const now = performance.now();
+        if (now < lock) return;
+        for (const n of wrap.children) {
+            if (n === card || n === ph) continue;
+            const q = n.getBoundingClientRect();
+            if (x >= q.left && x <= q.right && y >= q.top && y <= q.bottom) {
+                lock = now + 170;
+                flipReorder(wrap, () => (ph.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) ? n.after(ph) : n.before(ph), card);
+                break;
+            }
+        }
+    };
 
     const move = ev => {
         if (ev.pointerId !== pid || ended) return;
         const x = ev.clientX, y = ev.clientY;
+        lastX = x; lastY = y;
         if (!on) {
             if (Math.hypot(x - sx, y - sy) < 6) return;
             on = true;
             const r = card.getBoundingClientRect();
-            grab = { x: sx - r.left, y: sy - r.top };
             ph = el('div', { class: 'cat-ph' });
             ph.style.height = r.height + 'px';
             card.before(ph);
             card.classList.add('dragging');
-            Object.assign(card.style, { position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px',
-                                        height: r.height + 'px', zIndex: 60, pointerEvents: 'none', margin: 0 });
+            Object.assign(card.style, {
+                position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px',
+                height: r.height + 'px', zIndex: 60, pointerEvents: 'none', margin: 0, willChange: 'transform'
+            });
             const r2 = card.getBoundingClientRect();           // если у предка есть transform — компенсируем сдвиг
-            fix = { x: r2.left - r.left, y: r2.top - r.top };
+            baseX = r.left - (r2.left - r.left);
+            baseY = r.top - (r2.top - r.top);
+            card.style.left = baseX + 'px';
+            card.style.top = baseY + 'px';
             document.body.classList.add('cat-dragging');
         }
-        card.style.left = (x - grab.x - fix.x) + 'px';
-        card.style.top = (y - grab.y - fix.y) + 'px';
-        if (y < 70) window.scrollBy(0, -14); else if (y > innerHeight - 70) window.scrollBy(0, 14);
-        if (performance.now() < lock) return;
-        const t = [...wrap.children].find(n => {
-            if (n === card || n === ph) return false;
-            const q = n.getBoundingClientRect();
-            return x >= q.left && x <= q.right && y >= q.top && y <= q.bottom;
-        });
-        if (!t) return;
-        lock = performance.now() + 180;
-        flipReorder(wrap, () => (ph.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING) ? t.after(ph) : t.before(ph));
+        if (!rafId) rafId = requestAnimationFrame(step);
     };
 
     const onKey = ev => { if (ev.key === 'Escape') end({ pointerId: pid }, true); };
-    const onBlur = () => end({ pointerId: pid }, true);
     const end = (ev, cancel) => {
-        if (ev.pointerId !== pid || ended) return;
+        if (ev.pointerId !== pid) return;
         ended = true;
+        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         window.removeEventListener('keydown', onKey);
-        window.removeEventListener('blur', onBlur);
         head.removeEventListener('pointermove', move);
         head.removeEventListener('pointerup', up);
         head.removeEventListener('pointercancel', cancelUp);
@@ -1474,20 +1509,26 @@ function startCatDrag(e, card, head) {
         if (!on) return;
         document.body.classList.remove('cat-dragging');
         const from = card.getBoundingClientRect();
-        for (const p of ['position', 'left', 'top', 'width', 'height', 'zIndex', 'pointerEvents', 'margin']) card.style[p] = '';
+        for (const p of ['position', 'left', 'top', 'width', 'height', 'zIndex', 'pointerEvents', 'margin', 'transform', 'willChange']) card.style[p] = '';
         card.classList.remove('dragging');
         if (cancel) { ph.replaceWith(card); return; }
         ph.replaceWith(card);
         const to = card.getBoundingClientRect();
-        card.animate([{ transform: `translate(${from.left - to.left}px,${from.top - to.top}px)` }, { transform: 'none' }],
-                     { duration: animDur(160), easing: EASE });
+        const dur = animDur(160);
+        if (dur) {
+            card.animate([{ transform: `translate3d(${from.left - to.left}px,${from.top - to.top}px,0)` }, { transform: 'none' }],
+                         { duration: dur, easing: EASE });
+        }
         const byId = new Map(categories.map(c => [c.id, c]));
         const next = [...wrap.children].map(n => byId.get(n.dataset.id)).filter(Boolean);
-        if (next.length === categories.length && next.some((c, i) => c !== categories[i])) { categories = next; saveCats(); }
+        if (next.length === categories.length && next.some((c, i) => c !== categories[i])) {
+            categories = next;
+            catsSig = JSON.stringify(categories);
+            store.setCategories(categories);
+        }
     };
     const up = ev => end(ev, false), cancelUp = ev => end(ev, true);
     window.addEventListener('keydown', onKey);
-    window.addEventListener('blur', onBlur);
     head.addEventListener('pointermove', move);
     head.addEventListener('pointerup', up);
     head.addEventListener('pointercancel', cancelUp);
@@ -1686,15 +1727,16 @@ function downscaleImage(file, max = 256) {
         const img = new Image();
         img.onload = () => {
             try {
-                const scale = Math.min(1, max / Math.max(img.width, img.height));
-                const w = Math.max(1, Math.round(img.width * scale));
-                const h = Math.max(1, Math.round(img.height * scale));
+                const scale = Math.min(1, max / Math.max(img.width || max, img.height || max));
+                const w = Math.max(1, Math.round((img.width || max) * scale));
+                const h = Math.max(1, Math.round((img.height || max) * scale));
                 const canvas = document.createElement('canvas');
                 canvas.width = w; canvas.height = h;
-                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                const isJpeg = file.type === 'image/jpeg' || file.type === 'image/jpg';
-                const out = isJpeg ? canvas.toDataURL('image/jpeg', 0.88) : canvas.toDataURL('image/webp', 0.9);
-                resolve(out.startsWith('data:image/') ? out : canvas.toDataURL('image/png'));
+                const ctx = canvas.getContext('2d');
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(img, 0, 0, w, h);
+                resolve(canvas.toDataURL('image/webp', 0.9) || canvas.toDataURL('image/png'));
             } catch (err) { reject(err); }
             finally { URL.revokeObjectURL(url); }
         };
@@ -1724,16 +1766,50 @@ async function setCustomColor(hex) {
     const sel = $('#theme-select'); if (sel) sel.value = 'custom';
 }
 
+const LIVE_SLIDER_VARS = {
+    panelOpacity: v => ['--panel-opacity', v / 100],
+    cardOpacity: v => ['--card-opacity', v / 100],
+    panelBlur: v => [['--panel-blur', v + 'px'], ['--panel-bf', v > 0 ? `blur(${v}px)` : 'none']],
+    historyBlur: v => ['--sg-bf', v > 0 ? `blur(${v}px)` : 'none'],
+    historyOpacity: v => ['--sg-op', v + '%'],
+    settingsOpacity: v => ['--set-op', v + '%'],
+    settingsBlur: v => ['--set-bf', v > 0 ? `blur(${v}px)` : 'none'],
+    'radius.panel': v => ['--radius-panel', v + 'px'],
+    'radius.card': v => ['--radius-card', v + 'px'],
+    'radius.button': v => ['--radius-button', v + 'px'],
+    'radius.chip': v => ['--radius-chip', v + 'px'],
+    'radius.input': v => ['--radius-input', v + 'px'],
+    'font.size': v => ['--font-size', v + 'px'],
+    'font.weight': v => ['--font-weight', v],
+    'font.lineHeight': v => ['--line-height', v],
+    'font.letterSpacing': v => ['--ls', v + 'em'],
+    'font.titleSpacing': v => ['--ls-title', v + 'em'],
+    'font.subtitleSpacing': v => ['--ls-sub', v + 'em'],
+    transitionSpeed: v => ['--transition-speed', v + 's']
+};
+
 function bindSlider(inputId, path, valueId, suffix, step = 1) {
     const parse = e => step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
     const save = debounce(v => {
         const parts = path.split('.');
         if (parts.length === 1) updateAppearanceSetting(parts[0], v);
         else updateAppearanceSetting(parts[0], prev => ({ ...prev, [parts[1]]: v }));
-    }, 100);
+    }, 120);
+    let raf = 0, latest = 0;
+    const applyLive = () => {
+        raf = 0;
+        const fn = LIVE_SLIDER_VARS[path];
+        if (!fn) return;
+        const res = fn(latest);
+        const st = document.documentElement.style;
+        if (Array.isArray(res[0])) res.forEach(([k, val]) => st.setProperty(k, val));
+        else st.setProperty(res[0], res[1]);
+    };
     on(inputId, 'input', e => {
         const v = parse(e);
-        txt(valueId, v + suffix);   // подпись обновляется сразу, запись и применение стилей - с задержкой
+        latest = v;
+        txt(valueId, (step < 1 && v % 1 !== 0 ? v.toFixed(2) : v) + suffix);
+        if (!raf) raf = requestAnimationFrame(applyLive);
         save(v);
     });
 }
@@ -1755,8 +1831,13 @@ function paintAvatar(url, title = '') {
 function invalidateRuntimeState() {
     settingsCache = null;
     categories = [];
+    catsSig = '';
+    catsPending = null;
     qHistory = [];
     appliedTheme = null;
+    bgMediaSig = '';
+    bgAppliedSig = '';
+    clockCitiesSig = '';
     if (bgObjectUrl) {
         try { URL.revokeObjectURL(bgObjectUrl); } catch {}
         bgObjectUrl = null;
@@ -1816,13 +1897,16 @@ function syncSettingsUI(s) {
 /* ---------- 11.2. Применить ВСЁ из store к DOM ---------- */
 async function applyEverything() {
     const s = await store.getSettings();
+    s.bg = await repairBgMedia(s);
     await applyTheme(s.theme, false);
+    if (s.theme === 'custom') applyCustomThemeVars(s.customColor);
     applyAppearance(s.appearance);
     await applyBackground(s);
     paintTitle(s);
     const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
     paintAvatar(s.avatar || '', s.title);
     initThemeSelector(s.theme);
+    engine = ENGINES[s.engine] ? s.engine : 'google';
     qHistory = await store.getHistory();
     paintEngine();
     initClocks(s);
@@ -1840,7 +1924,7 @@ function bindSettings() {
         ov.addEventListener('click', e => { if (e.target === ov) toggleOverlay(ov, false); });
         ov.addEventListener('keydown', e => {
             if (e.key !== 'Tab') return;
-            const focusables = [...ov.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter(el => !el.hidden && el.offsetParent !== null);
+            const focusables = ov.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
             if (!focusables.length) return;
             const first = focusables[0];
             const last = focusables[focusables.length - 1];
@@ -1897,8 +1981,7 @@ function bindSettings() {
         const f = e.target.files[0]; if (!f) return;
         try {
             const type = f.type.indexOf('video') === 0 ? 'video' : 'image';
-            const blob = type === 'image' ? await compressImageBlob(f, 2560) : f;
-            await mediaPut(MEDIA_KEY, blob);
+            await mediaPut(MEDIA_KEY, f);
             await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
             val('set-bg-type', type); val('set-bg-url', '');
             await applyBackground(); toast('Фон обновлён');
@@ -1914,12 +1997,19 @@ function bindSettings() {
         if (u) mediaDel(MEDIA_KEY).catch(err => console.warn('[KOCH] media del:', err));
         await applyBackground(); toast('Фон обновлён');
     });
-    on('set-bg-opacity', 'input', debounce(async e => {
+    const saveBgOp = debounce(async v => {
+        await updateSetting('bg', prev => ({ ...prev, opacity: v }));
+    }, 120);
+    on('set-bg-opacity', 'input', e => {
         const v = parseInt(e.target.value, 10);
         txt('set-bg-opacity-val', v + '%');
-        await updateSetting('bg', prev => ({ ...prev, opacity: v }));
-        await applyBackground();
-    }, 100));
+        const op = v / 100;
+        document.documentElement.style.setProperty('--bg-opacity', op);
+        const vid = document.getElementById('bg-video'), img = document.getElementById('bg-image');
+        if (vid && !vid.hidden) vid.style.opacity = op;
+        if (img && !img.hidden) img.style.opacity = op;
+        saveBgOp(v);
+    });
 
     bindSlider('set-panel-opacity', 'panelOpacity', 'set-panel-opacity-val', '%');
     bindSlider('set-card-opacity', 'cardOpacity', 'set-card-opacity-val', '%');
@@ -2007,7 +2097,7 @@ function setSlider(inputId, value, valueId, suffix) { val(inputId, value); txt(v
 
 async function openSettings() {
     syncSettingsUI(await store.getSettings());
-    toggleOverlay(document.getElementById('settings-overlay'), true);
+    toggleOverlay(document.getElementById('settings-overlay'), true, '#theme-select');
 }
 
 /* ---------- 12. Запуск ---------- */
@@ -2031,15 +2121,18 @@ function bindKeys() {
     if (keysBound) return;
     keysBound = true;
     document.addEventListener('keydown', e => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchInput()?.focus(); }
-        if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
-        if (e.key === 'Escape') {
-            const openOvs = [...document.querySelectorAll('.overlay:not([hidden])')];
-            if (openOvs.length) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchInput()?.focus(); return; }
+        if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); return; }
+        if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            const tag = document.activeElement?.tagName;
+            if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !document.querySelector('.overlay:not([hidden])')) {
                 e.preventDefault();
-                toggleOverlay(openOvs[openOvs.length - 1], false);
+                searchInput()?.focus();
                 return;
             }
+        }
+        if (e.key === 'Escape') {
+            closeOverlays();
             hideSuggest();
         }
     });
@@ -2053,7 +2146,6 @@ async function boot() {
         s.bg = await repairBgMedia(s);
         await applyTheme(s.theme, false);
         applyAppearance(s.appearance);
-        document.documentElement.classList.remove('booting');
         paintTitle(s);
         const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
         paintAvatar(s.avatar || '', s.title);
@@ -2085,13 +2177,14 @@ async function boot() {
             if (ENGINES[next.engine] && next.engine !== engine) { engine = next.engine; paintEngine(); }
             const sel = $('#theme-select'); if (sel) sel.value = next.theme || 'rose';
             if (JSON.stringify(next.cities || []) !== clockCitiesSig) initClocks(next);
+            const setOv = document.getElementById('settings-overlay');
+            if (setOv && !setOv.hidden) syncSettingsUI(next);
         }, 120);
         store.onSettingsChange(sync);
         store.onCategoriesChange(renderCats);
 
         console.info(`[KOCH] Загружено за ${Math.round(performance.now() - start)}ms`);
     } catch (err) {
-        document.documentElement.classList.remove('booting');
         console.error('[KOCH] Boot error:', err);
         toast('Ошибка инициализации', 'error');
     }

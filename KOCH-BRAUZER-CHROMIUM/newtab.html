@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru" class="intro booting">
+<html lang="ru" class="intro">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -191,7 +191,7 @@ html.intro .cat-card:nth-child(8){animation-delay:.30s}
 .settings-modal .close-btn{width:30px;height:30px;border-radius:50%;font-size:.8rem;transition:background-color .15s ease,color .15s ease}
 .settings-modal .close-btn:hover{transform:none}
 .settings-modal .modal-body{gap:0}
-.settings-modal .sec{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:0;border-top:1px solid color-mix(in srgb,var(--border) 50%,transparent);border-radius:0;background:none;content-visibility:auto;contain-intrinsic-size:auto 260px}
+.settings-modal .sec{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:0;border-top:1px solid color-mix(in srgb,var(--border) 50%,transparent);border-radius:0;background:none}
 .settings-modal .sec:first-child{border-top:0}
 .settings-modal .sec>*{min-width:0}
 .settings-modal .grp{grid-column:1/-1;font-size:.64rem;letter-spacing:.26em;color:var(--muted)}
@@ -229,137 +229,124 @@ html.img-bg .panel::before{inset:calc(var(--panel-blur) * -3);backdrop-filter:no
  background-size:cover;background-position:center;background-attachment:fixed;filter:var(--panel-bf);clip-path:inset(calc(var(--panel-blur) * 3) round var(--r-lg))}
 html.img-bg .panel::after{content:'';position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;background:var(--panel);box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
 .modal{contain:layout paint}
-/* perf: hover в 6 шагов — компромисс плавности и GPU при backdrop-filter */
-.clock-card{transition:transform .18s steps(6,jump-end)}
-.chip::after,.clock-card::after{transition:opacity .18s steps(6,jump-end)}
+/* perf: плавные compositor-анимации (transform + opacity) для 60-240Hz мониторов без дёрганого steps(6) */
+.clock-card{transition:transform var(--tr),border-color .2s ease}
+.chip,.chip-ico{transition:transform var(--tr),background-color .18s ease}
+.chip::after,.clock-card::after{transition:opacity var(--tr)}
 /* выравнивание: плюс рисуется CSS (глиф + смещается по baseline), кнопки поиска одного размера,
    компенсация хвостового letter-spacing у центрированных подписей, цифры часов моноширинные */
-.cat-add{position:relative;font-size:0;transition:color .2s,background-color .2s,transform .2s}
+.cat-add{position:relative;font-size:0;transition:color .18s ease,background-color .18s ease,transform .18s ease}
 .cat-add::before,.cat-add::after{content:'';position:absolute;left:50%;top:50%;background:currentColor;border-radius:1px;transform:translate(-50%,-50%)}
 .cat-add::before{width:12px;height:2px}
 .cat-add::after{width:2px;height:12px}
 .search-bar{padding:7px}
 .engine-btn,.go-btn{width:42px;height:42px;min-width:42px;flex:none;display:grid;place-items:center;padding:0}
-.clock-time{font-variant-numeric:tabular-nums}
-.clock-wx{min-height:34px;display:flex;align-items:center;justify-content:center;line-height:1.2}
-.cat-name{text-indent:calc(.22em + var(--ls))}
+.clock-time{font-variant-numeric:tabular-nums;margin:5px 0 9px}
+.clock-wx{min-height:34px;display:flex;align-items:center;justify-content:center;line-height:1.2;border:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
+.cat-name{text-indent:calc(.22em + var(--ls));background:linear-gradient(90deg,var(--text),color-mix(in srgb,var(--text) 70%,var(--accent)));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .clock-city{text-indent:calc(.25em + var(--ls))}
 .add-cat{text-indent:calc(.2em + var(--ls))}
 .title{text-indent:calc(var(--ls-title) + var(--ls))}
-.subtitle{text-indent:calc(var(--ls-sub) + var(--ls))}
+.subtitle{text-indent:calc(var(--ls-sub) + var(--ls));text-wrap:balance}
 /* внешний вид без нагрузки на GPU: только статичные градиенты и тени */
-.cat-card,.clock-card{background-image:linear-gradient(180deg,rgba(255,255,255,.05),transparent 45%);box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.cat-card,.clock-card{background-image:linear-gradient(180deg,rgba(255,255,255,.05),transparent 45%);box-shadow:inset 0 1px 0 rgba(255,255,255,.05);contain:layout style}
 .cat-head{border-bottom:0;padding-bottom:11px;background:linear-gradient(90deg,transparent,var(--border-hi),transparent) bottom/100% 1px no-repeat}
 .chip-ico{border-radius:12px;background:none}
-.chip:hover{background-color:color-mix(in srgb,var(--card2) 88%,var(--accent) 12%)}
-.chip-name{letter-spacing:.01em}
-.subtitle{text-wrap:balance}
-/* визуал, раунд 2: статично, без нагрузки на GPU */
+.chip-ico img{background:none;border-radius:10px}
+.chip-ico span{font-weight:700;font-size:1.05rem;color:var(--accent)}
+.chip:hover{background-color:color-mix(in srgb,var(--card2) 88%,var(--accent) 12%);transform:translateY(-2px)}
+.chip:active{transform:translateY(0) scale(.98)}
+.chip:hover .chip-ico{transform:scale(1.08)}
+.chip-name{letter-spacing:.01em;color:color-mix(in srgb,var(--text) 92%,var(--muted));text-shadow:none;transition:color .15s ease}
+.chip:hover .chip-name{color:var(--text)}
+.chip.chip-drop-before::before,.chip.chip-drop-after::before{content:'';position:absolute;top:6px;bottom:6px;width:3px;border-radius:3px;background:var(--accent);box-shadow:0 0 8px var(--glow);pointer-events:none;z-index:2}
+.chip.chip-drop-before::before{left:-6px}
+.chip.chip-drop-after::before{right:-6px}
 ::selection{background:color-mix(in srgb,var(--accent) 38%,transparent)}
 input,select,textarea{caret-color:var(--accent);accent-color:var(--accent)}
 #search-input::placeholder{color:var(--muted);opacity:.85}
-.search-bar{box-shadow:inset 0 1px 0 rgba(255,255,255,.05);transition:border-color .15s}
+.search-bar{box-shadow:inset 0 1px 0 rgba(255,255,255,.05);transition:border-color .18s ease,box-shadow .18s ease}
 .search-bar:focus-within{transform:none;box-shadow:0 0 0 2px var(--glow),inset 0 1px 0 rgba(255,255,255,.05)}
 .avatar{box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 16%,transparent),0 0 26px var(--glow)}
-.clock-wx{border:1px solid color-mix(in srgb,var(--border) 70%,transparent)}
-.chip-name{color:color-mix(in srgb,var(--text) 92%,var(--muted))}
-.chip:hover .chip-name{color:var(--text)}
-.add-cat:hover{border-style:dashed;background:transparent}
+.add-cat:hover{border-style:dashed;background:color-mix(in srgb,var(--accent) 6%,transparent)}
 .add-cat:focus-visible,.chip:focus-visible{outline:2px dashed var(--accent);outline-offset:3px}
-.cat-card{content-visibility:auto;contain-intrinsic-size:auto 220px}
+.cat-card{content-visibility:auto;contain-intrinsic-size:auto 220px;transition:border-color .2s ease}
+.cat-card:hover{border-color:var(--border-hi)}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
-/* кнопки поиска: hover без scale/rotate (на дробном масштабе полупрозрачные круглые кнопки дают швы-перекрестие при растеризации) */
-.engine-btn,.go-btn{transition:border-color .15s,background-color .15s,filter .15s}
+/* кнопки поиска: hover без scale/rotate */
+.engine-btn,.go-btn{transition:border-color .15s ease,background-color .15s ease,filter .15s ease,box-shadow .15s ease}
 .engine-btn:hover{transform:none;border-color:var(--accent);background-color:color-mix(in srgb,var(--card2) 78%,var(--accent) 22%)}
 .go-btn:hover{transform:none;filter:brightness(1.12);box-shadow:0 4px 18px var(--glow),0 0 0 3px var(--glow)}
 .go-btn:active{transform:none;filter:brightness(.9)}
 .cat-add:hover{transform:none}
 .engine-btn,.go-btn,.pill-btn,.cat-add{cursor:pointer;user-select:none;-webkit-user-select:none}
-/* visual polish, round 3: cheap transforms only */
-.chip-ico span{font-weight:700;font-size:1.05rem;color:var(--accent)}
-.suggest{overscroll-behavior:contain}
-.settings-modal{overscroll-behavior:contain}
-/* hover: only color changes, no transforms over backdrop-filter (GPU) */
-.chip{transition:transform .18s ease}
-.chip-ico{transition:transform .18s ease}
-.chip,.chip-ico,.chip::after,.clock-card,.clock-card::after{transition-timing-function:steps(6,jump-end)}
-.chip:hover{transform:translateY(-2px)}
-.chip:active{transform:translateY(0) scale(.98)}
-.chip:hover .chip-ico{transform:scale(1.08)}
-.chip-ico img{background:none;border-radius:10px}
-.cat-card,.clock-card{contain:layout style}
-.chip-name{text-shadow:none}
-.cat-name{background:linear-gradient(90deg,var(--text),color-mix(in srgb,var(--text) 70%,var(--accent)));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.suggest,.settings-modal{overscroll-behavior:contain}
 html:has(.dragging) .chip,html:has(.dragging) .cat-card{transition:none}
-html:has(.dragging) .chip:hover{transform:none}
-html:has(.dragging) .chip:hover .chip-ico{transform:none}
+html:has(.dragging) .chip:hover,html:has(.dragging) .chip:hover .chip-ico{transform:none}
 html{scrollbar-gutter:stable}
-@media (hover:none){.chip:hover,.chip:hover .chip-ico{transform:none}}
-/* final polish: calm category hover (colors only), nicer settings */
-.settings-modal .modal-head{background-image:linear-gradient(90deg,transparent,color-mix(in srgb,var(--accent) 55%,transparent),transparent);background-size:100% 1px;background-position:bottom;background-repeat:no-repeat;border-bottom:0}
+@media (hover:none){.chip:hover,.chip:hover .chip-ico,.clock-card:hover{transform:none}}
+/* final polish: calm category hover, nicer settings & modals */
+.settings-modal{display:flex;flex-direction:column;overflow:hidden;width:min(660px,94vw);max-height:88vh;box-shadow:0 24px 64px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.08)}
+.settings-modal .modal-head{position:relative;flex-shrink:0;background:color-mix(in srgb,var(--bg) 78%,var(--card));background-image:linear-gradient(90deg,transparent,color-mix(in srgb,var(--accent) 55%,transparent),transparent);background-size:100% 1px;background-position:bottom;background-repeat:no-repeat;border-bottom:0;padding:13px 20px}
 .settings-modal .modal-head h2{color:var(--accent2,var(--text))}
+.settings-modal .modal-body{flex:1;overflow-y:auto;padding:2px 18px 18px;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--accent) 45%,transparent) transparent}
+.settings-modal .modal-body::-webkit-scrollbar{width:8px}
+.settings-modal .modal-body::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--accent) 40%,transparent);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
 .settings-modal .fld input[type=text]:focus,.settings-modal .fld input[type=url]:focus,.settings-modal .fld select:focus{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 20%,transparent)}
-.settings-modal .fld input[type=text],.settings-modal .fld input[type=url],.settings-modal .fld select{transition:border-color .15s ease,background-color .15s ease,box-shadow .15s ease}
-.settings-modal .fld input[type=text]:hover,.settings-modal .fld input[type=url]:hover,.settings-modal .fld select:hover{background:color-mix(in srgb,var(--text) 8%,transparent)}
-.settings-modal .fld input[type=file]{transition:border-color .15s ease}
-.settings-modal .fld input[type=file]:hover{border-color:var(--accent)}
-.settings-modal .fld input[type=file]::file-selector-button{margin-right:10px;padding:5px 12px;border:0;border-radius:999px;background:color-mix(in srgb,var(--accent) 22%,transparent);color:var(--text);font-weight:600;cursor:pointer}
-.settings-modal .fld input[type=range]::-webkit-slider-thumb{transition:transform .12s ease}
-.settings-modal .fld input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.15)}
+.settings-modal .fld input[type=text],.settings-modal .fld input[type=url],.settings-modal .fld select{transition:border-color .15s ease,background-color .15s ease,box-shadow .15s ease;padding:8px 12px;border:1px solid color-mix(in srgb,var(--border) 60%,transparent)}
+.settings-modal .fld select,.fld select{appearance:none;-webkit-appearance:none;padding-right:34px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;cursor:pointer}
+.settings-modal .fld input[type=text]:hover,.settings-modal .fld input[type=url]:hover,.settings-modal .fld select:hover{background-color:color-mix(in srgb,var(--text) 8%,transparent);border-color:color-mix(in srgb,var(--border-hi) 75%,transparent)}
+.settings-modal .fld select option{background:var(--bg);color:var(--text)}
+.settings-modal .fld input[type=file]{transition:border-color .15s ease,background-color .15s ease;padding:6px 10px;min-height:38px;display:flex;align-items:center}
+.settings-modal .fld input[type=file]:hover{border-color:var(--accent);background:color-mix(in srgb,var(--text) 4%,transparent)}
+.settings-modal .fld input[type=file]::file-selector-button{margin-right:10px;padding:5px 12px;border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:999px;background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--text);font-weight:600;font-size:.74rem;cursor:pointer;transition:background-color .15s ease,border-color .15s ease}
+.settings-modal .fld input[type=file]::file-selector-button:hover{background:color-mix(in srgb,var(--accent) 32%,transparent);border-color:var(--accent)}
+.settings-modal .row2{align-items:stretch}
+.settings-modal .row2>.btn{height:38px;align-self:end;display:inline-flex;align-items:center;justify-content:center}
+.settings-modal .fld input[type=color]{width:42px;height:38px;padding:3px;border:1px solid color-mix(in srgb,var(--border) 70%,transparent);border-radius:var(--radius-input);background:color-mix(in srgb,var(--text) 6%,transparent)}
+.settings-modal .fld input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+.settings-modal .fld input[type=color]::-webkit-color-swatch{border:0;border-radius:calc(var(--radius-input) - 3px)}
+.settings-modal .fld input[type=color]::-moz-color-swatch{border:0;border-radius:calc(var(--radius-input) - 3px)}
+.settings-modal .fld:has(input[type=range])>span{font-variant-numeric:tabular-nums;color:var(--accent2);background:color-mix(in srgb,var(--accent) 12%,transparent);padding:1px 8px;border-radius:999px;font-size:.72rem}
+.settings-modal .fld input[type=range]::-webkit-slider-thumb{transition:transform .12s ease,box-shadow .12s ease}
+.settings-modal .fld input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.15);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 48%,transparent)}
+.settings-modal .fld input[type=range]::-moz-range-thumb{transition:transform .12s ease,box-shadow .12s ease}
+.settings-modal .fld input[type=range]::-moz-range-thumb:hover{transform:scale(1.15);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 48%,transparent)}
 .settings-modal .btn,.settings-modal .btn-small{transition:background-color .15s ease,border-color .15s ease,color .15s ease}
 .settings-modal .btn:hover,.settings-modal .btn-small:hover{border-color:var(--accent);transform:none}
-/* compact settings + panel polish */
-.settings-modal{width:min(660px,94vw);max-height:90vh}
-.settings-modal .modal-head{padding:11px 20px}
-.settings-modal .modal-body{padding:0 14px 14px}
-.settings-modal .sec{gap:10px 20px;padding:14px 6px}
-.settings-modal .grp{gap:8px;margin-bottom:-2px}
-.settings-modal .row2{gap:10px 20px}
-.settings-modal .fld{gap:5px}
-.settings-modal .fld input[type=text],.settings-modal .fld input[type=url],.settings-modal .fld select{padding:7px 11px}
-.settings-modal .fld:has(input[type=range]){row-gap:4px}
-.settings-modal .hint{margin-top:-4px}
+.settings-modal .sec{gap:11px 20px;padding:15px 4px}
+.settings-modal .grp{gap:8px;margin-bottom:0;color:var(--accent2);font-weight:700}
+.settings-modal .row2{gap:10px 16px}
+.settings-modal .fld{gap:6px}
+.settings-modal .fld:has(input[type=range]){row-gap:5px}
+.settings-modal .hint{margin-top:-2px;line-height:1.45}
+.settings-modal .modal-actions{padding:16px 4px 2px;justify-content:flex-start;align-items:center;gap:8px}
+.settings-modal .modal-actions #reset-btn{margin-left:auto}
+.close-btn{display:grid;place-items:center}
+.close-btn:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:1px}
+.sc-icon-preview-row{padding:8px 12px;border-radius:var(--radius-input);background:color-mix(in srgb,var(--text) 4%,transparent);border:1px solid color-mix(in srgb,var(--border) 50%,transparent);min-height:48px}
+.modal.small .fld input[type=text],.modal.small .fld input[type=url]{background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid color-mix(in srgb,var(--border) 60%,transparent);padding:9px 12px;font-size:.86rem}
+.modal.small .fld input[type=text]:hover,.modal.small .fld input[type=url]:hover{background:color-mix(in srgb,var(--text) 8%,transparent);border-color:color-mix(in srgb,var(--border-hi) 75%,transparent)}
+.modal.small .fld input[type=text]:focus,.modal.small .fld input[type=url]:focus{border-color:var(--accent);background:color-mix(in srgb,var(--text) 9%,transparent)}
+.modal.small{backdrop-filter:var(--set-bf);-webkit-backdrop-filter:var(--set-bf);background:color-mix(in srgb,color-mix(in srgb,var(--accent) 6%,var(--bg)) 88%,transparent);box-shadow:0 24px 60px rgba(0,0,0,.58),inset 0 1px 0 rgba(255,255,255,.08)}
+.modal.small .modal-head{background:transparent;background-image:linear-gradient(90deg,transparent,color-mix(in srgb,var(--accent) 55%,transparent),transparent);background-size:100% 1px;background-position:bottom;background-repeat:no-repeat;border-bottom:0;padding:14px 20px}
+.modal.small .modal-head h2{font-size:.82rem;letter-spacing:.22em;font-weight:700}
+.modal.small .close-btn{width:30px;height:30px;border-radius:50%;font-size:.8rem}
 .panel{border-color:color-mix(in srgb,var(--border-hi) 65%,transparent)}
 .panel::before{background-image:linear-gradient(180deg,rgba(255,255,255,.045),transparent 180px)}
-/* polish round 4: статично, без нагрузки на GPU/CPU */
+.chip-ico:has(span){background:radial-gradient(circle at 30% 30%,color-mix(in srgb,var(--accent) 20%,var(--card2)),color-mix(in srgb,var(--card2) 90%,transparent));border:1px solid color-mix(in srgb,var(--border-hi) 50%,transparent);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.chip-ico span{font-weight:800;font-size:1.08rem;color:var(--accent2);text-shadow:0 0 12px var(--glow)}
 :root{color-scheme:dark}
 body[data-theme="light"]{color-scheme:light}
-.clock-time{margin:5px 0 9px}
-/* polish round 5: утончённые улучшения UX */
-.cat-card{transition:border-color .2s ease}
-.cat-card:hover{border-color:var(--border-hi)}
-.toast{will-change:transform,opacity}
-.modal{will-change:transform,opacity}
+body[data-theme="light"] .panel{box-shadow:0 0 0 1px rgba(224,68,140,.12),0 14px 36px rgba(80,20,55,.1)}
+body[data-theme="light"] .cat-card,body[data-theme="light"] .clock-card{box-shadow:0 2px 10px rgba(80,20,55,.05),inset 0 1px 0 rgba(255,255,255,.8)}
+body[data-theme="light"] .settings-modal .modal-head{background:color-mix(in srgb,var(--bg) 88%,var(--card))}
+body[data-theme="light"] .modal.small{background:color-mix(in srgb,var(--bg) 92%,var(--card))}
 .suggest li{-webkit-user-select:none;user-select:none}
 .btn:active{transform:translateY(0) scale(.97)!important}
 .btn.ghost:active{background:color-mix(in srgb,var(--text) 10%,transparent)}
 .go-btn svg{transition:transform .15s ease}
 .go-btn:hover svg{transform:scale(1.06)}
-/* polish round 6: perf, bugfixes & visual refinement */
-html.booting body{opacity:0;transition:none}
-.clock-card{contain:style}
-.cat-card{contain:layout style;content-visibility:visible}
-.toast,.modal{will-change:auto}
-.panel{box-shadow:0 0 0 1px rgba(0,0,0,.22),0 16px 40px -8px rgba(0,0,0,.42),0 0 36px -12px var(--glow)}
-.clock-card,.cat-card{box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 4px 14px -4px rgba(0,0,0,.22)}
-.search-bar{box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 4px 16px -4px rgba(0,0,0,.2)}
-.chip{border-color:color-mix(in srgb,var(--border) 45%,transparent);box-shadow:inset 0 1px 0 rgba(255,255,255,.04);transition:transform .18s cubic-bezier(.22,.7,.3,1),background-color .18s ease,border-color .18s ease}
-.chip-ico{transition:transform .18s cubic-bezier(.22,.7,.3,1)}
-.chip::after,.clock-card::after{transition:opacity .18s ease}
-.clock-card{transition:transform .18s cubic-bezier(.22,.7,.3,1),border-color .18s ease}
-.chip:hover{border-color:color-mix(in srgb,var(--border-hi) 75%,transparent)}
-.cat-card:empty,.chips:empty{min-height:48px}
-.chips:empty::after{content:'Перетащите ярлык или нажмите ＋';grid-column:1/-1;text-align:center;font-size:.72rem;color:var(--muted);opacity:.6;padding:14px 4px;pointer-events:none}
-[data-theme="light"] .panel{box-shadow:0 0 0 1px rgba(224,68,140,.12),0 16px 40px -10px rgba(80,20,55,.12),0 0 32px -10px var(--glow)}
-[data-theme="light"] .clock-card,[data-theme="light"] .cat-card{box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 4px 14px -4px rgba(80,20,55,.07)}
-[data-theme="light"] .chip{background:color-mix(in srgb,var(--card2) 85%,#fff 15%);border-color:color-mix(in srgb,var(--border) 60%,transparent)}
-[data-theme="light"] .overlay{background:rgba(35,14,28,.32)}
-[data-theme="light"] #settings-overlay{background:rgba(35,14,28,.18)}
-.chip.drop-before{box-shadow:-3px 0 0 0 var(--accent),inset 0 1px 0 rgba(255,255,255,.04)}
-.chip.drop-after{box-shadow:3px 0 0 0 var(--accent),inset 0 1px 0 rgba(255,255,255,.04)}
-.clock-wx{font-variant-numeric:tabular-nums;gap:6px}
-.fld select{appearance:none;-webkit-appearance:none;padding-right:32px!important;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 16px) 50%,calc(100% - 11px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
-.fld select option{background:var(--bg);color:var(--text)}
 </style>
 </head>
 <body data-theme="rose">
@@ -405,7 +392,7 @@ html.booting body{opacity:0;transition:none}
     <section class="search-row">
       <div class="search-bar">
         <button id="engine-btn" class="engine-btn" title="Сменить поисковик" aria-label="Сменить поисковик">G</button>
-        <input id="search-input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="suggest-list" aria-label="Поиск" placeholder="Поиск… (Ctrl+K)" autocomplete="off" spellcheck="false">
+        <input id="search-input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="suggest-list" aria-label="Поиск" placeholder="Поиск…" autocomplete="off" spellcheck="false">
         <button id="search-go" class="go-btn" title="Найти" aria-label="Найти">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.6" stroke-linecap="round">
             <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>

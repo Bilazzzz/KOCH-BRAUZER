@@ -8,8 +8,7 @@
   },
   "permissions": [
     "storage",
-    "tabs",
-    "favicon"
+    "tabs"
   ],
   "host_permissions": [
     "https://api.open-meteo.com/*",
