@@ -89,6 +89,9 @@ async function replaceStartupCandidate(tabId) {
 function registerStartupCandidate(tab) {
   if (!tab || !tab.id || !STARTUP_PAGE_URLS.has(tab.url || '')) return;
 
+  const prev = startupCandidates.get(tab.id);
+  if (prev) clearTimeout(prev.timer);
+
   const url = tab.url;
   startupCandidates.set(tab.id, {
     initialUrl: url,

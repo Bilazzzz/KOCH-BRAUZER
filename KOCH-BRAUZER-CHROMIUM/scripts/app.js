@@ -87,9 +87,14 @@ function toast(msg, type = 'info') {
     setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, 2600);
 }
 
+const hasChromeFavicon = isExt && typeof browser === 'undefined' && typeof chrome !== 'undefined' && !!chrome.runtime?.getURL;
 function faviconOf(url) {
     try {
         const u = new URL(/^https?:\/\//i.test(url) ? url : 'https://' + url);
+        if (!u.hostname) return '';
+        if (hasChromeFavicon) {
+            return `${chrome.runtime.getURL('/_favicon/')}?pageUrl=${encodeURIComponent(u.href)}&size=64`;
+        }
         return `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=64`;
     } catch { return ''; }
 }
@@ -589,18 +594,18 @@ function applyCustomThemeVars(hex) {
     const cl = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
 
     const S = cl(s, 30, 90);
-    const L = cl(l, 15, 85);
-    const d = L / 60;
+    const L = cl(l, 20, 78);
+    const d = cl(L, 25, 65) / 60;
 
-    const bg      = hslHex(h, S * 0.55, cl(4 * d, 2, 14));
-    const panel   = hslHex(h, S * 0.60, cl(8 * d, 4, 22));
-    const card    = hslHex(h, S * 0.60, cl(11 * d, 6, 28));
-    const card2   = hslHex(h, S * 0.60, cl(15 * d, 9, 34));
-    const accent  = clean;
-    const accent2 = hslHex(h, cl(S, 40, 90), cl(L + 16, 55, 88));
-    const yellow  = hslHex((h + 50) % 360, 75, 70);
-    const text    = hslHex(h, S * 0.30, 93);
-    const muted   = hslHex(h, S * 0.50, cl(L * 0.8 + 15, 45, 72));
+    const bg      = hslHex(h, S * 0.55, cl(4 * d, 3, 12));
+    const panel   = hslHex(h, S * 0.60, cl(8 * d, 5, 18));
+    const card    = hslHex(h, S * 0.60, cl(11 * d, 7, 24));
+    const card2   = hslHex(h, S * 0.60, cl(15 * d, 10, 30));
+    const accent  = hslHex(h, S, cl(l, 42, 72));
+    const accent2 = hslHex(h, cl(S, 45, 92), cl(L + 16, 60, 86));
+    const yellow  = hslHex((h + 48) % 360, 82, 72);
+    const text    = hslHex(h, S * 0.25, 95);
+    const muted   = hslHex(h, S * 0.42, cl(L * 0.65 + 24, 52, 74));
 
     const st = document.documentElement.style;
     st.setProperty('--bg', bg);
@@ -685,7 +690,7 @@ let bgVideoUrl = '';
 let bgAppliedSig = '';   // JSON применённого фона: по нему sync решает, нужно ли перечитывать медиа
 let pageGone = false;
 
-/* Страница «живая», только если вкладка видима и окно не свёрнуто. */
+/* Страница «живая», только если вкладка видима и не выгружена. */
 const isPageActive = () => !document.hidden && !pageGone;
 
 function applyBackground(preloaded) {
@@ -761,8 +766,9 @@ async function applyBackgroundNow(preloaded) {
         bgVideoActive = false; bgVideoUrl = '';
         releaseVideo(v);
         v.hidden = true; i.hidden = false;
-        i.style.backgroundImage = `url("${url}")`; i.style.opacity = op;
-        document.documentElement.style.setProperty('--bg-img', `url("${url}")`);
+        const cssUrl = `url("${String(url).replace(/["\\\n\r]/g, '\\$&')}")`;
+        i.style.backgroundImage = cssUrl; i.style.opacity = op;
+        document.documentElement.style.setProperty('--bg-img', cssUrl);
         document.documentElement.classList.add('img-bg');
     } else {
         bgVideoActive = false; bgVideoUrl = '';
@@ -878,16 +884,18 @@ function scheduleWxRetry() {
 const wxText = w => `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
 
 async function geocode(city) {
+    city = (city || '').trim();
     if (!city || city === '—') return null;
-    if (geoCache.has(city)) return geoCache.get(city);
-    const saved = wxStore.geo(city);
-    if (saved) { geoCache.set(city, saved); return saved; }
+    const key = city.toLowerCase();
+    if (geoCache.has(key)) return geoCache.get(key);
+    const saved = wxStore.geo(key) || wxStore.geo(city);
+    if (saved) { geoCache.set(key, saved); return saved; }
     try {
         const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=ru&format=json`);
         const g = d?.results?.[0];
         const info = g ? { lat: g.latitude, lon: g.longitude, tz: g.timezone || null } : null;
-        geoCache.set(city, info);
-        if (info) wxStore.setGeo(city, info);
+        geoCache.set(key, info);
+        if (info) wxStore.setGeo(key, info);
         return info;
     } catch { return null; } // сбой сети не кэшируем: следующая попытка повторит запрос
 }
@@ -981,16 +989,31 @@ async function refreshWeather() {
 window.addEventListener('online', () => { wxRetryN = 0; if (clocksReady && isPageActive()) refreshWeather(); });
 
 function stopClockTimers() {
+    if (tickAlignT) { clearTimeout(tickAlignT); tickAlignT = null; }
     if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
     if (wxTimer) { clearInterval(wxTimer); wxTimer = null; }
     if (wxRetryT) { clearTimeout(wxRetryT); wxRetryT = null; }
 }
 
+let tickAlignT = null;
+function scheduleAlignedTicks() {
+    if (tickAlignT) { clearTimeout(tickAlignT); tickAlignT = null; }
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+    if (!isPageActive() || !clockSlots.length) return;
+    tick();
+    const delay = 1000 - (Date.now() % 1000);
+    tickAlignT = setTimeout(() => {
+        tickAlignT = null;
+        if (!isPageActive()) return;
+        tick();
+        tickTimer = setInterval(tick, 1000);
+    }, delay);
+}
+
 function startClockTimers() {
     stopClockTimers();
     if (!isPageActive() || !clockSlots.length) return;
-    tick();
-    tickTimer = setInterval(tick, 1000);
+    scheduleAlignedTicks();
     if (clocksReady) {
         wxTimer = setInterval(refreshWeather, WX_INTERVAL);
         if (wxNeedRetry || Date.now() - lastWxAt >= WX_INTERVAL) { wxRetryN = 0; refreshWeather(); }
@@ -999,8 +1022,8 @@ function startClockTimers() {
 
 /* Пока вкладка скрыта или окно свёрнуто — таймеры часов и погоды не тикают. */
 function syncClockTimers() {
-    if (!isPageActive()) { if (tickTimer || wxTimer) stopClockTimers(); }
-    else if (!tickTimer) startClockTimers();
+    if (!isPageActive()) { if (tickTimer || tickAlignT || wxTimer) stopClockTimers(); }
+    else if (!tickTimer && !tickAlignT) startClockTimers();
 }
 
 async function initClocks(preloaded) {
@@ -1017,8 +1040,7 @@ async function initClocks(preloaded) {
         if (nameEl) nameEl.textContent = String(city).toUpperCase();
         return { city, tz: null, geo: null, fmt: null, el: null };
     });
-    tick();
-    if (isPageActive()) tickTimer = setInterval(tick, 1000);
+    scheduleAlignedTicks();
     (async () => {
         await Promise.all(clockSlots.map(async sl => {
             sl.geo = await geocode(sl.city);
@@ -1105,30 +1127,42 @@ function renderSuggest() {
         const ago = agoLabel(h.id);
         const fill = svgEl(ICO_FILL, '', 'Вставить в поле');
         const del = svgEl(ICO_X, 'del', 'Удалить');
-        const li = el('li', { role: 'option', dataset: { hid: h.id, hq: h.q } },
+        const li = el('li', { role: 'option', 'aria-selected': 'false', dataset: { hid: h.id, hq: h.q } },
                   svgEl(ICO_CLOCK, 'ico'), el('span', { class: 'q' }, markMatch(h.q, q)),
                   ago ? el('span', { class: 'ago' }, ago) : null, el('span', { class: 'act' }, fill, del));
         return li;
     });
     // при наборе — первой строкой быстрое действие «Искать …»
     if (raw && !items.some(h => h.q === raw)) {
-        rows.unshift(el('li', { class: 'go', role: 'option', dataset: { hq: '' } },
+        rows.unshift(el('li', { class: 'go', role: 'option', 'aria-selected': 'false', dataset: { hq: '' } },
                         svgEl(ICO_SEARCH, 'ico'), el('span', { class: 'q' }, 'Искать «' + raw + '»')));
     }
+    rows.forEach((li, idx) => { li.id = 'sg-opt-' + idx; });
     ul.replaceChildren(...rows);
     box.hidden = rows.length === 0;
+    inp.setAttribute('aria-expanded', String(!box.hidden));
+    inp.removeAttribute('aria-activedescendant');
 }
 
 function moveSuggest(dir) {
     const box = suggestBox(); if (!box || box.hidden) return false;
     const lis = [...suggestList().children]; if (!lis.length) return false;
     sugSel = (sugSel + dir + lis.length) % lis.length;
-    lis.forEach((li, i) => li.classList.toggle('sel', i === sugSel));
+    lis.forEach((li, i) => {
+        const active = i === sugSel;
+        li.classList.toggle('sel', active);
+        li.setAttribute('aria-selected', String(active));
+    });
     lis[sugSel].scrollIntoView({ block: 'nearest' });
+    searchInput()?.setAttribute('aria-activedescendant', lis[sugSel].id);
     return true;
 }
 
-function hideSuggest() { const b = suggestBox(); if (b) b.hidden = true; }
+function hideSuggest() {
+    const b = suggestBox(); if (b) b.hidden = true;
+    const inp = searchInput();
+    if (inp) { inp.setAttribute('aria-expanded', 'false'); inp.removeAttribute('aria-activedescendant'); }
+}
 
 async function goSearch() {
     const inp = searchInput(); if (!inp) return;
@@ -1157,16 +1191,19 @@ async function initSearch(preloaded, history) {
         store.updateSettings(st => ({ ...st, engine }));
         paintEngine();
     });
-    searchInput()?.addEventListener('input', debounce(renderSuggest, 90));
+    const debouncedSuggest = debounce(renderSuggest, 90);
+    searchInput()?.addEventListener('input', debouncedSuggest);
     searchInput()?.addEventListener('focus', renderSuggest);
     searchInput()?.addEventListener('keydown', e => {
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (moveSuggest(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault(); return; }
         if (e.key === 'Enter' && !e.isComposing) {
+            debouncedSuggest.cancel();
             const li = sugSel >= 0 && !suggestBox().hidden ? suggestList().children[sugSel] : null;
             if (li) { li.click(); return; }
             goSearch();
         }
         if (e.key === 'Escape') {
+            debouncedSuggest.cancel();
             const box = suggestBox();
             if (box && !box.hidden) {
                 hideSuggest();
@@ -1271,8 +1308,21 @@ function buildCard(cat) {
         if (!dragState || dragState.type !== 'chip') return;
         e.preventDefault(); e.dataTransfer.dropEffect = 'move';
         card.classList.add('drag-over');
+        const t = e.target.closest?.('.chip');
+        card.querySelectorAll('.drop-before,.drop-after').forEach(n => { if (n !== t) n.classList.remove('drop-before', 'drop-after'); });
+        if (t && t.dataset.id !== dragState.id) {
+            const r = t.getBoundingClientRect();
+            const after = e.clientX > r.left + r.width / 2;
+            t.classList.toggle('drop-after', after);
+            t.classList.toggle('drop-before', !after);
+        }
     });
-    card.addEventListener('dragleave', e => { if (!card.contains(e.relatedTarget)) card.classList.remove('drag-over'); });
+    card.addEventListener('dragleave', e => {
+        if (!card.contains(e.relatedTarget)) {
+            card.classList.remove('drag-over');
+            card.querySelectorAll('.drop-before,.drop-after').forEach(n => n.classList.remove('drop-before', 'drop-after'));
+        }
+    });
     card.addEventListener('drop', e => {
         const dr = dragState;
         if (!dr || dr.type !== 'chip') return;   // перенос категорий обрабатывает контейнер #cats
@@ -1291,7 +1341,7 @@ function buildCard(cat) {
 let dragState = null;
 function clearDrag() {
     dragState = null;
-    document.querySelectorAll('.dragging,.drag-over').forEach(n => n.classList.remove('dragging', 'drag-over'));
+    document.querySelectorAll('.dragging,.drag-over,.drop-before,.drop-after').forEach(n => n.classList.remove('dragging', 'drag-over', 'drop-before', 'drop-after'));
 }
 
 function buildChip(cat, sc) {
@@ -1304,7 +1354,7 @@ function buildChip(cat, sc) {
         'aria-label': sc.title || sc.url || 'Ярлык',
         onclick: e => go(e.ctrlKey || e.metaKey),
         onauxclick: e => { if (e.button === 1) go(true); },
-        onkeydown: e => { if (e.key === 'Enter') go(e.ctrlKey || e.metaKey); } });
+        onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e.ctrlKey || e.metaKey); } } });
     let ico;
     const fallbackChar = ((sc.title || '').trim()[0] || '🌐').toUpperCase();
     if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:'))) {
@@ -1350,6 +1400,7 @@ function moveChip(from, scId, to, targetId, after) {
     let pos = d.shortcuts.length;
     const t = targetId ? d.shortcuts.findIndex(x => x.id === targetId) : -1;
     if (t !== -1) pos = t + (after ? 1 : 0);
+    if (from === to && pos === idx) { s.shortcuts.splice(idx, 0, sc); return; }
     d.shortcuts.splice(pos, 0, sc);
     saveCats();
 }
@@ -1410,10 +1461,12 @@ function startCatDrag(e, card, head) {
     };
 
     const onKey = ev => { if (ev.key === 'Escape') end({ pointerId: pid }, true); };
+    const onBlur = () => end({ pointerId: pid }, true);
     const end = (ev, cancel) => {
-        if (ev.pointerId !== pid) return;
+        if (ev.pointerId !== pid || ended) return;
         ended = true;
         window.removeEventListener('keydown', onKey);
+        window.removeEventListener('blur', onBlur);
         head.removeEventListener('pointermove', move);
         head.removeEventListener('pointerup', up);
         head.removeEventListener('pointercancel', cancelUp);
@@ -1434,6 +1487,7 @@ function startCatDrag(e, card, head) {
     };
     const up = ev => end(ev, false), cancelUp = ev => end(ev, true);
     window.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onBlur);
     head.addEventListener('pointermove', move);
     head.addEventListener('pointerup', up);
     head.addEventListener('pointercancel', cancelUp);
@@ -1553,10 +1607,12 @@ function bindScModal() {
         toast('Иконка сброшена на дефолтную');
     });
 
-    $('#sc-url')?.addEventListener('input', debounce(() => {
+    const syncScPreview = debounce(() => {
         const iconVal = ($('#sc-icon')?.value || '').trim();
         updateIconPreview(iconVal, $('#sc-url')?.value || '');
-    }, 300));
+    }, 200);
+    $('#sc-url')?.addEventListener('input', syncScPreview);
+    $('#sc-icon')?.addEventListener('input', syncScPreview);
 }
 
 const CAT_EMOJIS = ['🌐','🎵','🎮','💻','🛒','📚','🎨','📰','🏠','📱','🔧','💎','🚀','🎯','☕','📺','🌙','⭐','🎬','🧩'];
@@ -1636,7 +1692,9 @@ function downscaleImage(file, max = 256) {
                 const canvas = document.createElement('canvas');
                 canvas.width = w; canvas.height = h;
                 canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                resolve(canvas.toDataURL('image/png'));
+                const isJpeg = file.type === 'image/jpeg' || file.type === 'image/jpg';
+                const out = isJpeg ? canvas.toDataURL('image/jpeg', 0.88) : canvas.toDataURL('image/webp', 0.9);
+                resolve(out.startsWith('data:image/') ? out : canvas.toDataURL('image/png'));
             } catch (err) { reject(err); }
             finally { URL.revokeObjectURL(url); }
         };
@@ -1782,7 +1840,7 @@ function bindSettings() {
         ov.addEventListener('click', e => { if (e.target === ov) toggleOverlay(ov, false); });
         ov.addEventListener('keydown', e => {
             if (e.key !== 'Tab') return;
-            const focusables = ov.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+            const focusables = [...ov.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter(el => !el.hidden && el.offsetParent !== null);
             if (!focusables.length) return;
             const first = focusables[0];
             const last = focusables[focusables.length - 1];
@@ -1839,7 +1897,8 @@ function bindSettings() {
         const f = e.target.files[0]; if (!f) return;
         try {
             const type = f.type.indexOf('video') === 0 ? 'video' : 'image';
-            await mediaPut(MEDIA_KEY, f);
+            const blob = type === 'image' ? await compressImageBlob(f, 2560) : f;
+            await mediaPut(MEDIA_KEY, blob);
             await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
             val('set-bg-type', type); val('set-bg-url', '');
             await applyBackground(); toast('Фон обновлён');
@@ -1975,7 +2034,12 @@ function bindKeys() {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchInput()?.focus(); }
         if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
         if (e.key === 'Escape') {
-            closeOverlays();
+            const openOvs = [...document.querySelectorAll('.overlay:not([hidden])')];
+            if (openOvs.length) {
+                e.preventDefault();
+                toggleOverlay(openOvs[openOvs.length - 1], false);
+                return;
+            }
             hideSuggest();
         }
     });
@@ -1989,6 +2053,7 @@ async function boot() {
         s.bg = await repairBgMedia(s);
         await applyTheme(s.theme, false);
         applyAppearance(s.appearance);
+        document.documentElement.classList.remove('booting');
         paintTitle(s);
         const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
         paintAvatar(s.avatar || '', s.title);
@@ -2026,6 +2091,7 @@ async function boot() {
 
         console.info(`[KOCH] Загружено за ${Math.round(performance.now() - start)}ms`);
     } catch (err) {
+        document.documentElement.classList.remove('booting');
         console.error('[KOCH] Boot error:', err);
         toast('Ошибка инициализации', 'error');
     }
