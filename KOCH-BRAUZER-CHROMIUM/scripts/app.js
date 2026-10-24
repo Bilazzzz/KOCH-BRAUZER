@@ -194,6 +194,7 @@ const DEFAULT_SETTINGS = {
     openInNewTab: false,
     searchShortcuts: true,
     numHotkeys: false,
+    chipStyle: 'cards',
     hideAddCat: false,
     bg: { type: 'none', url: '', idb: '', opacity: 100 },
     appearance: {
@@ -229,7 +230,7 @@ const DEFAULT_CATEGORIES = [
     ]}
 ];
 
-const CURRENT_SCHEMA = 8;
+const CURRENT_SCHEMA = 9;
 const PROFILE_FORMAT_VERSION = 3;
 const MEDIA_KEY = 'bg-media';
 let settingsCache = null;
@@ -290,7 +291,7 @@ function normalizeSettings(s) {
         title: typeof s.title === 'string' ? s.title.slice(0, 40) : d.title,
         subtitle: typeof s.subtitle === 'string' ? s.subtitle.slice(0, 60) : d.subtitle,
         smartGreeting: typeof s.smartGreeting === 'boolean' ? s.smartGreeting : d.smartGreeting,
-        cities: Array.isArray(s.cities) ? s.cities.slice(0, 2).map(c => typeof c === 'string' ? c : '') : d.cities.slice(),
+        cities: Array.isArray(s.cities) ? [typeof s.cities[0] === 'string' ? s.cities[0] : '', typeof s.cities[1] === 'string' ? s.cities[1] : ''] : d.cities.slice(),
         clockSeconds: typeof s.clockSeconds === 'boolean' ? s.clockSeconds : d.clockSeconds,
         clockDate: typeof s.clockDate === 'boolean' ? s.clockDate : d.clockDate,
         wxUnit: s.wxUnit === 'F' ? 'F' : 'C',
@@ -300,6 +301,7 @@ function normalizeSettings(s) {
         openInNewTab: typeof s.openInNewTab === 'boolean' ? s.openInNewTab : d.openInNewTab,
         searchShortcuts: typeof s.searchShortcuts === 'boolean' ? s.searchShortcuts : d.searchShortcuts,
         numHotkeys: typeof s.numHotkeys === 'boolean' ? s.numHotkeys : d.numHotkeys,
+        chipStyle: s.chipStyle === 'compact' ? 'compact' : 'cards',
         hideAddCat: typeof s.hideAddCat === 'boolean' ? s.hideAddCat : d.hideAddCat,
         bg: normalizeBg(s.bg),
         appearance: normalizeAppearance(s.appearance)
@@ -339,7 +341,7 @@ function normalizeCategories(cats) {
             icon: str(c.icon, c.emoji),
             image: str(c.image, c.img),
             name: str(c.name, c.title) || 'Category',
-            collapsed: Boolean(c.collapsed),
+            collapsed: false,
             shortcuts: list.map(x => {
                 if (typeof x === 'string') x = { url: x, title: x };
                 if (!x || typeof x !== 'object') return null;
@@ -368,7 +370,7 @@ function normalizeHistory(h) {
 const SETTINGS_KEYS = [
     'theme', 'customColor', 'title', 'subtitle', 'smartGreeting', 'cities',
     'clockSeconds', 'clockDate', 'wxUnit', 'wxDetails', 'avatar', 'engine',
-    'openInNewTab', 'searchShortcuts', 'numHotkeys', 'hideAddCat',
+    'openInNewTab', 'searchShortcuts', 'numHotkeys', 'chipStyle', 'hideAddCat',
     'bg', 'appearance'
 ];
 
@@ -531,9 +533,12 @@ const store = {
         const d = await apiStorage.get(['settings', 'schemaVersion', 'categories', 'history']);
         const settings = await this._settingsFrom(d);
         this.sig = JSON.stringify(settings);
+        const hadCollapsed = Array.isArray(d.categories) && d.categories.some(c => c && c.collapsed);
+        const categories = Array.isArray(d.categories) ? normalizeCategories(d.categories) : clone(DEFAULT_CATEGORIES);
+        if (hadCollapsed) await apiStorage.set({ categories });
         return {
             settings,
-            categories: Array.isArray(d.categories) ? normalizeCategories(d.categories) : clone(DEFAULT_CATEGORIES),
+            categories,
             history: Array.isArray(d.history) ? normalizeHistory(d.history) : []
         };
     },
@@ -644,7 +649,7 @@ const THEMES = {
 };
 const THEME_SWATCH_COLORS = {
     rose: '#ff4fa3', purple: '#a855f7', ocean: '#38bdf8', green: '#34d399',
-    dark: '#64748b', light: '#f472b6', midnight: '#60a5fa', sunset: '#fb923c',
+    dark: '#64748b', light: '#e2e8f0', midnight: '#60a5fa', sunset: '#fb923c',
     custom: 'conic-gradient(from 0deg, #ff4fa3, #a855f7, #38bdf8, #34d399, #fb923c, #ff4fa3)'
 };
 
@@ -704,7 +709,7 @@ function syncThemeSwatches(activeId) {
 
 async function applyTheme(id, persist = true, preloadedCustomColor = null) {
     if (!THEMES[id]) id = 'rose';
-    if (id === appliedTheme && !persist) return;
+    if (id === appliedTheme && id !== 'custom' && !persist) return;
     appliedTheme = id;
     document.body.dataset.theme = id;
     syncThemeSwatches(id);
@@ -924,6 +929,7 @@ function paintTitleAndSubtitle(s) {
 function applyLayoutPreferences(s) {
     const addCatBtn = document.getElementById('add-cat');
     if (addCatBtn) addCatBtn.hidden = !!s.hideAddCat;
+    document.body.classList.toggle('chips-compact', s.chipStyle === 'compact');
 }
 
 async function repairBgMedia(s) {
@@ -1369,8 +1375,10 @@ function markMatch(text, q) {
 }
 
 function syncSearchClearBtn() {
-    const inp = searchInput(), clr = $('#search-clear');
-    if (inp && clr) clr.hidden = !inp.value.length;
+    const inp = searchInput(), clr = $('#search-clear'), kbd = $('.search-kbd');
+    const hasVal = !!(inp && inp.value.length);
+    if (clr) clr.hidden = !hasVal;
+    if (kbd) kbd.hidden = hasVal;
 }
 
 function renderSuggest() {
@@ -1446,6 +1454,9 @@ function renderSuggest() {
         ago ? el('span', { class: 'ago' }, ago) : null,
         el('span', { class: 'act' }, fill, del)));
     });
+
+    const clrBtn = $('#clear-history');
+    if (clrBtn) clrBtn.hidden = items.length === 0;
 
     ul.replaceChildren(...rows);
     const open = rows.length > 0;
@@ -1634,16 +1645,18 @@ let categories = [];
 let scModal = { catId: null, scId: null };
 
 let catsBusy = false, catsDirty = false, catsPending = null, catsRun = Promise.resolve(), catsSig = '';
-function renderCats(data) {
-    const sig = Array.isArray(data) ? JSON.stringify(data) : null;
+function renderCats(data, force = false) {
+    const s = settingsCache || DEFAULT_SETTINGS;
+    const renderFlags = `${!!s.numHotkeys}`;
+    const sig = Array.isArray(data) ? JSON.stringify(data) + '|' + renderFlags : null;
     if (catsBusy) {
-        if (sig === null || sig !== catsSig) {
+        if (force || sig === null || sig !== catsSig) {
             catsDirty = true;
             if (Array.isArray(data)) catsPending = { data, sig };
         }
         return catsRun;
     }
-    if (sig !== null && sig === catsSig) return catsRun;
+    if (!force && sig !== null && sig === catsSig) return catsRun;
     catsBusy = true;
     if (Array.isArray(data)) catsPending = { data, sig };
     catsRun = (async () => {
@@ -1653,10 +1666,13 @@ function renderCats(data) {
                 const pending = catsPending;
                 catsPending = null;
                 categories = pending ? pending.data : await store.getCategories();
-                catsSig = pending ? pending.sig : JSON.stringify(categories);
+                const curS = settingsCache || DEFAULT_SETTINGS;
+                const flags = `${!!curS.numHotkeys}`;
+                catsSig = (pending ? pending.sig : JSON.stringify(categories) + '|' + flags);
                 const wrap = $('#cats'); if (!wrap) return;
                 const frag = document.createDocumentFragment();
-                categories.forEach(cat => frag.append(buildCard(cat)));
+                const state = { hkCounter: 0, showHk: !!curS.numHotkeys };
+                categories.forEach(cat => frag.append(buildCard(cat, state)));
                 wrap.replaceChildren(frag);
             } while (catsDirty);
         } finally { catsBusy = false; }
@@ -1664,9 +1680,9 @@ function renderCats(data) {
     return catsRun;
 }
 
-function buildCard(cat) {
+function buildCard(cat, state = { hkCounter: 0, showHk: false }) {
     const card = el('div', {
-        class: ['cat-card', cat.collapsed ? 'collapsed' : ''],
+        class: 'cat-card',
         dataset: { id: cat.id }
     });
 
@@ -1682,7 +1698,7 @@ function buildCard(cat) {
 
     const head = el('div', {
         class: 'cat-head',
-        title: 'Перетащите для сортировки • Двойной клик — свернуть • ПКМ — изменить категорию'
+        title: 'Перетащите для сортировки • ПКМ — изменить категорию'
     },
     icoNode,
     el('span', { class: 'cat-name', title: cat.name }, cat.name),
@@ -1693,7 +1709,10 @@ function buildCard(cat) {
     }, '＋'));
 
     const chips = el('div', { class: 'chips' });
-    (cat.shortcuts || []).forEach(sc => chips.append(buildChip(cat, sc)));
+    (cat.shortcuts || []).forEach(sc => {
+        const hkNum = state.showHk && state.hkCounter < 9 ? ++state.hkCounter : 0;
+        chips.append(buildChip(cat, sc, hkNum));
+    });
     card.append(head, chips);
     return card;
 }
@@ -1707,7 +1726,7 @@ function clearDrag() {
     );
 }
 
-function buildChip(cat, sc) {
+function buildChip(cat, sc, hkNum = 0) {
     const chip = el('div', {
         class: 'chip', draggable: 'true', tabindex: 0, role: 'link',
         'aria-label': sc.title || sc.url || 'Ярлык',
@@ -1731,6 +1750,7 @@ function buildChip(cat, sc) {
         el('div', { class: 'chip-ico' }, ico),
         el('div', { class: 'chip-name', title: sc.title }, sc.title)
     );
+    if (hkNum > 0) chip.append(el('span', { class: 'chip-hk', 'aria-hidden': 'true' }, String(hkNum)));
     return chip;
 }
 
@@ -1749,7 +1769,6 @@ function moveChip(from, scId, to, targetId, after) {
     const t = targetId ? d.shortcuts.findIndex(x => x.id === targetId) : -1;
     if (t !== -1) pos = t + (after ? 1 : 0);
     d.shortcuts.splice(pos, 0, sc);
-    if (d.collapsed) d.collapsed = false;
     saveCats();
 }
 
@@ -1851,8 +1870,7 @@ function startCatDrag(e, card, head) {
         const next = [...wrap.children].map(n => byId.get(n.dataset.id)).filter(Boolean);
         if (next.length === categories.length && next.some((c, i) => c !== categories[i])) {
             categories = next;
-            catsSig = JSON.stringify(categories);
-            store.setCategories(categories);
+            saveCats();
         }
     };
     const up = ev => end(ev, false), cancelUp = ev => end(ev, true);
@@ -1924,13 +1942,14 @@ let overlayReturn = null;
 function toggleOverlay(ov, open, focusSel = '.close-btn') {
     if (!ov || ov.hidden === !open) return;
     ov.hidden = !open;
-    for (const n of document.querySelectorAll('.topbar,.panel')) n.inert = open;
+    const anyOpen = !!document.querySelector('.overlay:not([hidden])');
+    for (const n of document.querySelectorAll('.topbar,.panel')) n.inert = anyOpen;
     if (open) {
-        overlayReturn = document.activeElement;
+        if (!overlayReturn) overlayReturn = document.activeElement;
         ov.querySelector(focusSel)?.focus({ preventScroll: true });
         const body = ov.querySelector('.modal-body');
         if (body) body.scrollTop = 0;
-    } else {
+    } else if (!anyOpen) {
         overlayReturn?.focus?.({ preventScroll: true });
         overlayReturn = null;
     }
@@ -2041,18 +2060,6 @@ function bindCatModal() {
             }
             const chip = e.target.closest('.chip');
             if (chip) openChipUrl(chip, e.ctrlKey || e.metaKey || e.shiftKey);
-        });
-        wrap.addEventListener('dblclick', e => {
-            const head = e.target.closest('.cat-head');
-            if (!head || e.target.closest('button')) return;
-            const card = head.closest('.cat-card');
-            if (!card) return;
-            const cat = categories.find(c => c.id === card.dataset.id);
-            if (!cat) return;
-            cat.collapsed = !cat.collapsed;
-            card.classList.toggle('collapsed', cat.collapsed);
-            catsSig = JSON.stringify(categories);
-            store.setCategories(categories);
         });
         wrap.addEventListener('auxclick', e => {
             if (e.button !== 1) return;
@@ -2338,6 +2345,7 @@ function syncSettingsUI(s) {
     chk('set-open-newtab', s.openInNewTab);
     chk('set-search-shortcuts', s.searchShortcuts !== false);
     chk('set-num-hotkeys', s.numHotkeys);
+    val('set-chip-style', s.chipStyle || 'cards');
     chk('set-hide-add-cat', s.hideAddCat);
 
     const bg = s.bg || {};
@@ -2468,7 +2476,14 @@ function bindSettings() {
 
     on('set-open-newtab', 'change', e => updateSetting('openInNewTab', e.target.checked));
     on('set-search-shortcuts', 'change', e => updateSetting('searchShortcuts', e.target.checked));
-    on('set-num-hotkeys', 'change', e => updateSetting('numHotkeys', e.target.checked));
+    on('set-num-hotkeys', 'change', async e => {
+        await updateSetting('numHotkeys', e.target.checked);
+        renderCats(categories);
+    });
+    on('set-chip-style', 'change', async e => {
+        const next = await updateSetting('chipStyle', e.target.value);
+        applyLayoutPreferences(next);
+    });
     on('set-hide-add-cat', 'change', async e => {
         const next = await updateSetting('hideAddCat', e.target.checked);
         applyLayoutPreferences(next);
@@ -2694,7 +2709,7 @@ function bindKeys() {
             }
             if (settingsCache?.numHotkeys && /^[1-9]$/.test(e.key)) {
                 const idx = parseInt(e.key, 10) - 1;
-                const allChips = [...document.querySelectorAll('#cats .cat-card:not(.collapsed) .chip')];
+                const allChips = [...document.querySelectorAll('#cats .cat-card .chip')];
                 if (allChips[idx]) {
                     e.preventDefault();
                     openChipUrl(allChips[idx], e.shiftKey);
@@ -2751,6 +2766,7 @@ async function boot() {
                 wxDetails: !!next.wxDetails
             });
             if (nextClockSig !== clockConfigSig) initClocks(next);
+            renderCats(categories);
             const setOv = document.getElementById('settings-overlay');
             if (setOv && !setOv.hidden) syncSettingsUI(next);
         }, 120);
