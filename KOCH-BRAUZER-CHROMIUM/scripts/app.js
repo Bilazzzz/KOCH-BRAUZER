@@ -4,12 +4,22 @@
 const api = typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null);
 const isExt = !!(api && api.runtime && api.runtime.id);
 
+const memFallback = new Map();
+const safeLS = {
+    get(k) { try { return localStorage.getItem(k); } catch { return memFallback.has(k) ? memFallback.get(k) : null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch { memFallback.set(k, v); } },
+    clearKb() {
+        try { Object.keys(localStorage).forEach(k => { if (k.startsWith('kb_')) localStorage.removeItem(k); }); }
+        catch { for (const k of [...memFallback.keys()]) if (k.startsWith('kb_')) memFallback.delete(k); }
+    }
+};
+
 const apiStorage = {
     async get(keys) {
         if (!isExt) {
             const r = {}, ka = Array.isArray(keys) ? keys : [keys];
             for (const k of ka) {
-                const raw = localStorage.getItem('kb_' + k);
+                const raw = safeLS.get('kb_' + k);
                 if (raw !== null) { try { r[k] = JSON.parse(raw); } catch { r[k] = raw; } }
             }
             return r;
@@ -19,8 +29,7 @@ const apiStorage = {
     async set(items) {
         if (!isExt) {
             for (const [k, v] of Object.entries(items)) {
-                try { localStorage.setItem('kb_' + k, JSON.stringify(v)); }
-                catch (err) { console.warn('[KOCH] storage quota:', k, err); throw err; }
+                safeLS.set('kb_' + k, JSON.stringify(v));
             }
             return;
         }
@@ -28,7 +37,7 @@ const apiStorage = {
     },
     async clear() {
         if (!isExt) {
-            Object.keys(localStorage).forEach(k => { if (k.startsWith('kb_')) localStorage.removeItem(k); });
+            safeLS.clearKb();
             return;
         }
         return api.storage.local.clear();
@@ -126,7 +135,7 @@ function normalizeUrl(str) {
 
 /* ---------- 3. Цвет: HEX <-> HSL ---------- */
 function hexToRgb(hex) {
-    const n = parseInt(String(hex).replace('#', ''), 16);   // сюда всегда приходит полный #rrggbb
+    const n = parseInt(String(hex).replace('#', ''), 16);
     return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
 
@@ -174,13 +183,22 @@ const DEFAULT_SETTINGS = {
     customColor: '#ff4fa3',
     title: 'KOCH BRAUZER',
     subtitle: 'твоя стартовая страница',
+    smartGreeting: false,
     cities: ['Воткинск', 'Уральск'],
+    clockSeconds: true,
+    clockDate: false,
+    wxUnit: 'C',
+    wxDetails: false,
     avatar: '',
     engine: 'google',
+    openInNewTab: false,
+    searchShortcuts: true,
+    numHotkeys: false,
+    hideAddCat: false,
     bg: { type: 'none', url: '', idb: '', opacity: 100 },
     appearance: {
         panelOpacity: 30, cardOpacity: 45,
-        panelBlur: 5, historyBlur: 5, historyOpacity: 45, settingsOpacity: 45, settingsBlur: 5,
+        panelBlur: 8, historyBlur: 14, historyOpacity: 78, settingsOpacity: 76, settingsBlur: 14,
         radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10 },
         font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1, letterSpacing: 0, titleSpacing: 0.14, subtitleSpacing: 0.12 },
         animations: true, transitionSpeed: 0.28
@@ -188,30 +206,30 @@ const DEFAULT_SETTINGS = {
 };
 
 const DEFAULT_CATEGORIES = [
-    { id: 'c1', icon: '🌐', image: '', name: 'Соцсети', shortcuts: [
+    { id: 'c1', icon: '🌐', image: '', name: 'Соцсети', collapsed: false, shortcuts: [
         { id: 's1', title: 'YouTube', url: 'https://youtube.com', icon: '' },
         { id: 's2', title: 'Telegram', url: 'https://web.telegram.org', icon: '' },
         { id: 's3', title: 'VK', url: 'https://vk.com', icon: '' },
         { id: 's4', title: 'Discord', url: 'https://discord.com', icon: '' }
     ]},
-{ id: 'c2', icon: '🎵', image: '', name: 'Музыка', shortcuts: [
-    { id: 's5', title: 'Spotify', url: 'https://open.spotify.com', icon: '' },
-    { id: 's6', title: 'SoundCloud', url: 'https://soundcloud.com', icon: '' },
-    { id: 's7', title: 'Я Музыка', url: 'https://music.yandex.ru', icon: '' }
-]},
-{ id: 'c3', icon: '🎮', image: '', name: 'Игры', shortcuts: [
-    { id: 's8', title: 'Steam', url: 'https://steampowered.com', icon: '' },
-    { id: 's9', title: 'Twitch', url: 'https://twitch.tv', icon: '' },
-    { id: 's10', title: 'Epic Games', url: 'https://store.epicgames.com', icon: '' }
-]},
-{ id: 'c4', icon: '💻', image: '', name: 'Разработка', shortcuts: [
-    { id: 's11', title: 'GitHub', url: 'https://github.com', icon: '' },
-    { id: 's12', title: 'StackOverflow', url: 'https://stackoverflow.com', icon: '' },
-    { id: 's13', title: 'Reddit', url: 'https://reddit.com', icon: '' }
-]}
+    { id: 'c2', icon: '🎵', image: '', name: 'Музыка', collapsed: false, shortcuts: [
+        { id: 's5', title: 'Spotify', url: 'https://open.spotify.com', icon: '' },
+        { id: 's6', title: 'SoundCloud', url: 'https://soundcloud.com', icon: '' },
+        { id: 's7', title: 'Я Музыка', url: 'https://music.yandex.ru', icon: '' }
+    ]},
+    { id: 'c3', icon: '🎮', image: '', name: 'Игры', collapsed: false, shortcuts: [
+        { id: 's8', title: 'Steam', url: 'https://steampowered.com', icon: '' },
+        { id: 's9', title: 'Twitch', url: 'https://twitch.tv', icon: '' },
+        { id: 's10', title: 'Epic Games', url: 'https://store.epicgames.com', icon: '' }
+    ]},
+    { id: 'c4', icon: '💻', image: '', name: 'Разработка', collapsed: false, shortcuts: [
+        { id: 's11', title: 'GitHub', url: 'https://github.com', icon: '' },
+        { id: 's12', title: 'StackOverflow', url: 'https://stackoverflow.com', icon: '' },
+        { id: 's13', title: 'Reddit', url: 'https://reddit.com', icon: '' }
+    ]}
 ];
 
-const CURRENT_SCHEMA = 7;
+const CURRENT_SCHEMA = 8;
 const PROFILE_FORMAT_VERSION = 3;
 const MEDIA_KEY = 'bg-media';
 let settingsCache = null;
@@ -268,12 +286,21 @@ function normalizeSettings(s) {
     const d = DEFAULT_SETTINGS;
     return {
         theme: typeof s.theme === 'string' && THEMES[s.theme] ? s.theme : d.theme,
-        customColor: typeof s.customColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(s.customColor) ? s.customColor : d.customColor,
+        customColor: typeof s.customColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(s.customColor) ? s.customColor.toLowerCase() : d.customColor,
         title: typeof s.title === 'string' ? s.title.slice(0, 40) : d.title,
         subtitle: typeof s.subtitle === 'string' ? s.subtitle.slice(0, 60) : d.subtitle,
+        smartGreeting: typeof s.smartGreeting === 'boolean' ? s.smartGreeting : d.smartGreeting,
         cities: Array.isArray(s.cities) ? s.cities.slice(0, 2).map(c => typeof c === 'string' ? c : '') : d.cities.slice(),
+        clockSeconds: typeof s.clockSeconds === 'boolean' ? s.clockSeconds : d.clockSeconds,
+        clockDate: typeof s.clockDate === 'boolean' ? s.clockDate : d.clockDate,
+        wxUnit: s.wxUnit === 'F' ? 'F' : 'C',
+        wxDetails: typeof s.wxDetails === 'boolean' ? s.wxDetails : d.wxDetails,
         avatar: typeof s.avatar === 'string' ? s.avatar : d.avatar,
         engine: typeof s.engine === 'string' && ENGINES[s.engine] ? s.engine : d.engine,
+        openInNewTab: typeof s.openInNewTab === 'boolean' ? s.openInNewTab : d.openInNewTab,
+        searchShortcuts: typeof s.searchShortcuts === 'boolean' ? s.searchShortcuts : d.searchShortcuts,
+        numHotkeys: typeof s.numHotkeys === 'boolean' ? s.numHotkeys : d.numHotkeys,
+        hideAddCat: typeof s.hideAddCat === 'boolean' ? s.hideAddCat : d.hideAddCat,
         bg: normalizeBg(s.bg),
         appearance: normalizeAppearance(s.appearance)
     };
@@ -288,7 +315,6 @@ function migrateSettings(s, ver) {
     }
     if (ver < 5 && m.appearance.font.lineHeight === 1.5) m.appearance.font.lineHeight = 1;
     if (ver < 7) {
-        // прежние дефолты (10/12/80/88/14) заменяются новыми; осознанно изменённые значения не трогаем
         const a = m.appearance, d = DEFAULT_SETTINGS.appearance;
         if (a.panelBlur === 10) a.panelBlur = d.panelBlur;
         if (a.historyBlur === 12) a.historyBlur = d.historyBlur;
@@ -313,6 +339,7 @@ function normalizeCategories(cats) {
             icon: str(c.icon, c.emoji),
             image: str(c.image, c.img),
             name: str(c.name, c.title) || 'Category',
+            collapsed: Boolean(c.collapsed),
             shortcuts: list.map(x => {
                 if (typeof x === 'string') x = { url: x, title: x };
                 if (!x || typeof x !== 'object') return null;
@@ -338,12 +365,13 @@ function normalizeHistory(h) {
 }
 
 /* Ключи настроек, по которым узнаётся очень старый бэкап, где настройки лежали прямо в корне файла. */
-const SETTINGS_KEYS = ['theme', 'customColor', 'title', 'subtitle', 'cities', 'avatar', 'engine', 'bg', 'appearance'];
+const SETTINGS_KEYS = [
+    'theme', 'customColor', 'title', 'subtitle', 'smartGreeting', 'cities',
+    'clockSeconds', 'clockDate', 'wxUnit', 'wxDetails', 'avatar', 'engine',
+    'openInNewTab', 'searchShortcuts', 'numHotkeys', 'hideAddCat',
+    'bg', 'appearance'
+];
 
-/* Возвращает только те разделы, которые реально есть в файле (остальные — null),
-   чтобы частичный бэкап не затирал существующие данные значениями по умолчанию.
-   Файл без единого узнаваемого раздела отклоняется: раньше любой JSON-объект
-   молча сбрасывал настройки, категории и историю. */
 function migrateBackup(data) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Файл не похож на бэкап KOCH BRAUZER');
     const p = data.format === 'koch-brauzer-profile' && data.profile && typeof data.profile === 'object' ? data.profile : data;
@@ -429,8 +457,6 @@ function blobToBase64(blob) {
     });
 }
 
-/* Декодирование средствами браузера (fetch data:-URL) вместо atob + цикла по байтам:
-   для крупного видеофона это убирает копии файла в виде строки и Uint8Array (пик RAM при импорте). */
 async function base64ToBlob(dataUrl, mime) {
     if (typeof dataUrl !== 'string' || !dataUrl.includes(',')) throw new Error('Invalid data URL');
     const blob = await (await fetch(dataUrl)).blob();
@@ -485,7 +511,7 @@ async function importMedia(list) {
 
 /* ---------- Store ---------- */
 const store = {
-    sig: '',   // JSON настроек, уже применённых в этой вкладке: свои же записи не применяются повторно
+    sig: '',
     async _settingsFrom(data) {
         let s = data.settings;
         const ver = data.schemaVersion || 1;
@@ -493,7 +519,7 @@ const store = {
             s = migrateSettings(s, ver);
             await apiStorage.set({ settings: s, schemaVersion: CURRENT_SCHEMA });
         }
-        s = normalizeSettings(s);   // отбрасывает устаревшие ключи (например, старые blur фона/карточек)
+        s = normalizeSettings(s);
         settingsCache = s;
         return clone(s);
     },
@@ -501,18 +527,21 @@ const store = {
         if (settingsCache) return clone(settingsCache);
         return this._settingsFrom(await apiStorage.get(['settings', 'schemaVersion']));
     },
-    /* Единственное обращение к хранилищу при запуске: настройки + категории + история */
     async boot() {
         const d = await apiStorage.get(['settings', 'schemaVersion', 'categories', 'history']);
         const settings = await this._settingsFrom(d);
         this.sig = JSON.stringify(settings);
         return {
             settings,
-            categories: Array.isArray(d.categories) ? d.categories : clone(DEFAULT_CATEGORIES),
-            history: Array.isArray(d.history) ? d.history : []
+            categories: Array.isArray(d.categories) ? normalizeCategories(d.categories) : clone(DEFAULT_CATEGORIES),
+            history: Array.isArray(d.history) ? normalizeHistory(d.history) : []
         };
     },
-    async setSettings(s, inv = true) { if (inv) settingsCache = null; this.sig = JSON.stringify(s); await apiStorage.set({ settings: s }); },
+    async setSettings(s, inv = true) {
+        if (inv) settingsCache = s;
+        this.sig = JSON.stringify(s);
+        await apiStorage.set({ settings: s });
+    },
     _q: Promise.resolve(),
     updateSettings(fn) {
         const run = this._q.then(async () => {
@@ -524,24 +553,34 @@ const store = {
         this._q = run.catch(() => {});
         return run;
     },
-    async getCategories() { const d = await apiStorage.get('categories'); return Array.isArray(d.categories) ? d.categories : clone(DEFAULT_CATEGORIES); },
+    async getCategories() {
+        const d = await apiStorage.get('categories');
+        return Array.isArray(d.categories) ? normalizeCategories(d.categories) : clone(DEFAULT_CATEGORIES);
+    },
     async setCategories(c) { await apiStorage.set({ categories: c }); },
-    async getHistory() { const d = await apiStorage.get('history'); return Array.isArray(d.history) ? d.history : []; },
+    async getHistory() {
+        const d = await apiStorage.get('history');
+        return Array.isArray(d.history) ? normalizeHistory(d.history) : [];
+    },
     async setHistory(h) { await apiStorage.set({ history: h }); },
     onSettingsChange(cb) {
         apiStorage.onChanged((changes, area) => {
-            if (area === 'local' && changes.settings) { settingsCache = null; cb(changes.settings.newValue); }
+            if (area === 'local' && changes.settings) {
+                settingsCache = null;
+                cb(changes.settings.newValue ? normalizeSettings(changes.settings.newValue) : null);
+            }
         });
     },
     onCategoriesChange(cb) {
         apiStorage.onChanged((changes, area) => {
-            if (area === 'local' && changes.categories) cb(changes.categories.newValue);
+            if (area === 'local' && changes.categories) {
+                cb(Array.isArray(changes.categories.newValue) ? normalizeCategories(changes.categories.newValue) : []);
+            }
         });
     },
     async reset() {
         settingsCache = null;
         await apiStorage.clear();
-        // файл фона в IndexedDB и кэш погоды раньше после сброса оставались навсегда
         try { for (const k of await mediaKeys()) await mediaDel(k); } catch (err) { console.warn('[KOCH] reset media:', err); }
         try { localStorage.removeItem('koch_wx'); } catch {}
     },
@@ -592,7 +631,7 @@ const store = {
         for (const k of ['settings', 'categories', 'history']) if (migrated[k]) next[k] = migrated[k];
         if (migrated.settings) this.sig = JSON.stringify(migrated.settings);
         await apiStorage.set(next);
-        settingsCache = null;
+        settingsCache = migrated.settings ? clone(migrated.settings) : null;
         return migrated;
     }
 };
@@ -603,11 +642,16 @@ const THEMES = {
     dark: 'Тёмная', light: 'Светлая', midnight: 'Полночь', sunset: 'Закат',
     custom: 'Своя'
 };
+const THEME_SWATCH_COLORS = {
+    rose: '#ff4fa3', purple: '#a855f7', ocean: '#38bdf8', green: '#34d399',
+    dark: '#64748b', light: '#f472b6', midnight: '#60a5fa', sunset: '#fb923c',
+    custom: 'conic-gradient(from 0deg, #ff4fa3, #a855f7, #38bdf8, #34d399, #fb923c, #ff4fa3)'
+};
 
 let appliedTheme = null, bgObjectUrl = null;
 
 function applyCustomThemeVars(hex) {
-    const clean = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '#ff4fa3';
+    const clean = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex.toLowerCase() : '#ff4fa3';
     const { r, g, b } = hexToRgb(clean);
     const { h, s, l } = rgbToHsl(r, g, b);
     const cl = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
@@ -644,19 +688,33 @@ function applyCustomThemeVars(hex) {
 function clearCustomThemeVars() {
     const st = document.documentElement.style;
     ['--bg','--panel','--card','--card2','--accent','--accent2','--yellow',
-    '--text','--muted','--border','--border-hi','--glow']
+     '--text','--muted','--border','--border-hi','--glow']
     .forEach(k => st.removeProperty(k));
 }
 
-async function applyTheme(id, persist = true) {
+function syncThemeSwatches(activeId) {
+    const wrap = $('#theme-swatches');
+    if (!wrap) return;
+    wrap.querySelectorAll('.swatch-btn').forEach(btn => {
+        const isAct = btn.dataset.swatch === activeId;
+        btn.classList.toggle('active', isAct);
+        btn.setAttribute('aria-checked', String(isAct));
+    });
+}
+
+async function applyTheme(id, persist = true, preloadedCustomColor = null) {
     if (!THEMES[id]) id = 'rose';
     if (id === appliedTheme && !persist) return;
     appliedTheme = id;
     document.body.dataset.theme = id;
+    syncThemeSwatches(id);
+    const sel = $('#theme-select');
+    if (sel && sel.value !== id) sel.value = id;
+
     const p = persist ? store.updateSettings(s => ({ ...s, theme: id })) : null;
     if (id === 'custom') {
-        const s = await (p || store.getSettings());
-        if (appliedTheme === id) applyCustomThemeVars(s.customColor || '#ff4fa3');   // за время await тему могли сменить
+        const customHex = preloadedCustomColor || (await (p || store.getSettings())).customColor || '#ff4fa3';
+        if (appliedTheme === id) applyCustomThemeVars(customHex);
     } else {
         clearCustomThemeVars();
         if (p) await p;
@@ -669,7 +727,6 @@ function applyAppearance(app) {
     const r = document.documentElement;
     r.style.setProperty('--panel-opacity', (app.panelOpacity ?? d.panelOpacity) / 100);
     r.style.setProperty('--card-opacity', (app.cardOpacity ?? d.cardOpacity) / 100);
-    // blur(0px) всё равно создаёт слой и считается на GPU, поэтому при 0 фильтр выключается совсем
     const pb = app.panelBlur ?? d.panelBlur;
     r.style.setProperty('--panel-blur', pb + 'px');
     r.style.setProperty('--panel-bf', pb > 0 ? `blur(${pb}px)` : 'none');
@@ -699,18 +756,15 @@ function applyAppearance(app) {
     r.classList.toggle('reduce-motion', app.animations === false);
 }
 
-/* Применение фона. Вызовы выстраиваются в очередь: событие storage и ручной
-   вызов приходят почти одновременно, и раньше они гонялись друг с другом
-   (лишние blob-URL, перезагрузка видео, отозванный URL у только что
-   назначенного src). */
+/* ---------- 7.1. Фон и управление видеодекодером ---------- */
 let bgChain = Promise.resolve();
 let bgMediaSig = '';
 let bgVideoActive = false;
 let bgVideoUrl = '';
-let bgAppliedSig = '';   // JSON применённого фона: по нему sync решает, нужно ли перечитывать медиа
+let bgAppliedSig = '';
 let pageGone = false;
+let videoReleaseTimer = 0;
 
-/* Страница «живая», только если вкладка видима и окно не свёрнуто. */
 const isPageActive = () => !document.hidden && !pageGone;
 
 function applyBackground(preloaded) {
@@ -719,8 +773,9 @@ function applyBackground(preloaded) {
     return run;
 }
 
-/* Полностью освобождает видео (декодер и буферы), а не просто ставит на паузу. */
 function releaseVideo(v) {
+    clearTimeout(videoReleaseTimer);
+    videoReleaseTimer = 0;
     try { v.pause(); } catch {}
     if (v.hasAttribute('src')) {
         v.removeAttribute('src');
@@ -729,20 +784,27 @@ function releaseVideo(v) {
     v.dataset.kbUrl = '';
 }
 
-/* Единственное место, где решается, играет видео или нет.
-   Видео играет только когда фон — видео И страница видима.
-   Файл подгружается лениво — только когда страница реально видна. */
 function syncVideoPlayback() {
     const v = document.getElementById('bg-video');
     if (!v) return;
+    clearTimeout(videoReleaseTimer);
+    videoReleaseTimer = 0;
+
     if (bgVideoActive && bgVideoUrl && isPageActive()) {
         if (v.dataset.kbUrl !== bgVideoUrl) {
             v.dataset.kbUrl = bgVideoUrl;
             v.src = bgVideoUrl;
         }
         if (v.paused) v.play().catch(() => {});
-    } else if (!v.paused) {
-        v.pause();
+    } else {
+        if (!v.paused) {
+            try { v.pause(); } catch {}
+        }
+        if (bgVideoActive && v.hasAttribute('src') && !isPageActive()) {
+            videoReleaseTimer = setTimeout(() => {
+                if (!isPageActive()) releaseVideo(v);
+            }, 4000);
+        }
     }
 }
 
@@ -760,8 +822,6 @@ async function applyBackgroundNow(preloaded) {
     if (bg.type !== 'none' && bg.idb) {
         const blob = await mediaGet(bg.idb).catch(() => null);
         if (blob) {
-            // Файл тот же — переиспользуем уже созданный blob-URL, чтобы любое
-            // изменение настроек не перезагружало видео заново.
             sig = `idb:${bg.idb}|${blob.size}|${blob.type}|${blob.lastModified || 0}|${blob.name || ''}`;
             url = (sig === bgMediaSig && bgObjectUrl) ? bgObjectUrl : URL.createObjectURL(blob);
         }
@@ -773,7 +833,6 @@ async function applyBackgroundNow(preloaded) {
     const op = (bg.opacity ?? 100) / 100;
     document.documentElement.style.setProperty('--bg-opacity', op);
 
-    // Размытие «стекла» нужно только поверх картинки/видео; на однотонном фоне оно ничего не меняет, но стоит GPU на каждом кадре hover-анимаций.
     const hasMedia = (bg.type === 'video' || bg.type === 'image') && url;
     root.classList.toggle('no-bg', !hasMedia);
     if (bg.type === 'video' && url) {
@@ -806,26 +865,25 @@ async function applyBackgroundNow(preloaded) {
     syncVideoPlayback();
 }
 
-/* ---------- 7.1. Пауза видео и таймеров: вкладки + сворачивание окна ---------- */
 let videoVisibilityBound = false;
+let blurSyncTimer = 0;
 
 function setupVideoVisibility() {
     if (videoVisibilityBound) return;
     videoVisibilityBound = true;
 
     const sync = () => {
+        clearTimeout(blurSyncTimer);
         syncVideoPlayback();
         syncClockTimers();
     };
 
-    // Переключение вкладки, сворачивание окна, полное перекрытие окна
     document.addEventListener('visibilitychange', sync);
-
-    // Страховка для браузеров/ОС, где visibilitychange при сворачивании приходит с задержкой
-    window.addEventListener('blur', () => setTimeout(sync, 150));
+    window.addEventListener('blur', () => {
+        clearTimeout(blurSyncTimer);
+        blurSyncTimer = setTimeout(sync, 150);
+    });
     window.addEventListener('focus', sync);
-
-    // bfcache / заморозка страницы
     window.addEventListener('pagehide', () => { pageGone = true; sync(); });
     window.addEventListener('pageshow', () => { pageGone = false; sync(); });
     document.addEventListener('freeze', () => { pageGone = true; sync(); });
@@ -834,14 +892,38 @@ function setupVideoVisibility() {
     sync();
 }
 
-function paintTitle(s) {
+function getSmartGreeting() {
+    const h = new Date().getHours();
+    if (h >= 5 && h < 12) return 'Доброе утро';
+    if (h >= 12 && h < 18) return 'Добрый день';
+    if (h >= 18 && h < 23) return 'Добрый вечер';
+    return 'Доброй ночи';
+}
+
+function paintTitleAndSubtitle(s) {
     const t = document.getElementById('main-title');
-    if (!t) return;
-    const raw = (s.title || 'KOCH BRAUZER').trim() || 'KOCH BRAUZER';
-    t.textContent = raw;
-    document.title = raw;
-    const fb = document.getElementById('avatar-fallback');
-    if (fb && !fb.hidden) fb.textContent = (raw[0] || 'K').toUpperCase();
+    if (t) {
+        const raw = (s.title || 'KOCH BRAUZER').trim() || 'KOCH BRAUZER';
+        t.textContent = raw;
+        document.title = raw;
+        const fb = document.getElementById('avatar-fallback');
+        if (fb && !fb.hidden) fb.textContent = (raw[0] || 'K').toUpperCase();
+    }
+    const sub = document.getElementById('subtitle');
+    if (sub) {
+        const baseSub = (s.subtitle ?? '').trim();
+        if (s.smartGreeting) {
+            const greet = getSmartGreeting();
+            sub.textContent = baseSub ? `${greet} • ${baseSub}` : greet;
+        } else {
+            sub.textContent = baseSub;
+        }
+    }
+}
+
+function applyLayoutPreferences(s) {
+    const addCatBtn = document.getElementById('add-cat');
+    if (addCatBtn) addCatBtn.hidden = !!s.hideAddCat;
 }
 
 async function repairBgMedia(s) {
@@ -866,11 +948,10 @@ async function repairBgMedia(s) {
 /* ---------- 8. Часы и погода ---------- */
 const geoCache = new Map();
 let tickTimer = null, wxTimer = null, clockSlots = [];
-let clockGen = 0, clocksReady = false, lastWxAt = 0, clockCitiesSig = '';
+let clockGen = 0, clocksReady = false, lastWxAt = 0, clockConfigSig = '';
+let clockOpts = { seconds: true, date: false, wxUnit: 'C', wxDetails: false };
 const WX_INTERVAL = 30 * 60 * 1000;
 
-/* fetch с таймаутом и проверкой статуса: раньше зависший запрос или ответ 4xx/5xx
-   молча ломал погоду, а временный сбой сети навсегда кэшировался как «город не найден». */
 async function fetchJson(url, ms = 8000, tries = 2) {
     let err;
     for (let i = 0; i < tries; i++) {
@@ -888,13 +969,11 @@ async function fetchJson(url, ms = 8000, tries = 2) {
     throw err;
 }
 
-/* Постоянный кэш гео и погоды: новая вкладка рисует погоду сразу, сеть нужна только для обновления.
-   Раньше при каждой новой вкладке выполнялись 2–4 запроса, и любой сбой оставлял «—» на 30 минут. */
 const WX_FRESH = 15 * 60 * 1000, WX_STALE = 6 * 60 * 60 * 1000;
 const wxStore = (() => {
     let d = null;
-    const load = () => d || (d = (() => { try { return JSON.parse(localStorage.getItem('koch_wx')) || { geo: {}, wx: {} }; } catch { return { geo: {}, wx: {} }; } })());
-    const save = () => { try { localStorage.setItem('koch_wx', JSON.stringify(d)); } catch {} };
+    const load = () => d || (d = (() => { try { return JSON.parse(safeLS.get('koch_wx')) || { geo: {}, wx: {} }; } catch { return { geo: {}, wx: {} }; } })());
+    const save = () => { try { safeLS.set('koch_wx', JSON.stringify(d)); } catch {} };
     return {
         geo: c => load().geo[c] || null,
         wx: k => load().wx[k] || null,
@@ -912,13 +991,19 @@ const wxStore = (() => {
         }
     };
 })();
+
 let wxRetryN = 0, wxRetryT = 0, wxNeedRetry = false;
 function scheduleWxRetry() {
     clearTimeout(wxRetryT);
     if (wxRetryN >= 20) return;
     wxRetryT = setTimeout(() => { if (isPageActive()) refreshWeather(); }, Math.min(3000 * 2 ** Math.min(wxRetryN++, 5), 60000));
 }
-const wxText = w => `${w.t > 0 ? '+' : ''}${w.t}°C ${wxEmoji(w.code)}`;
+
+function formatTemp(celsius, unit = clockOpts.wxUnit) {
+    const val = unit === 'F' ? Math.round(celsius * 9 / 5 + 32) : Math.round(celsius);
+    return `${val > 0 ? '+' : ''}${val}°${unit}`;
+}
+
 function wxDesc(code) {
     if (code === 0) return 'Ясно';
     if (code === 1) return 'Преимущественно ясно';
@@ -931,47 +1016,6 @@ function wxDesc(code) {
     if (code <= 82) return 'Ливень';
     if (code <= 86) return 'Снегопад';
     return 'Гроза';
-}
-function applyWxNode(el, w) {
-    if (!el) return;
-    if (!w) { el.textContent = '—'; el.removeAttribute('title'); return; }
-    const txt = wxText(w);
-    if (el.textContent !== txt) el.textContent = txt;
-    const timeStr = w.at ? new Date(w.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
-    el.title = `${wxDesc(w.code)}${timeStr ? ' • обновлено в ' + timeStr : ''}`;
-}
-
-const geoPending = new Map();
-async function geocode(city) {
-    const key = typeof city === 'string' ? city.trim().toLowerCase() : '';
-    if (!key || key === '—') return null;
-    if (geoCache.has(key)) return geoCache.get(key);
-    const saved = wxStore.geo(key) || wxStore.geo(city);
-    if (saved) { geoCache.set(key, saved); return saved; }
-    if (geoPending.has(key)) return geoPending.get(key);
-    const req = (async () => {
-        try {
-            const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city.trim())}&count=1&language=ru&format=json`);
-            const g = d?.results?.[0];
-            const info = g ? { lat: g.latitude, lon: g.longitude, tz: g.timezone || null } : null;
-            geoCache.set(key, info);
-            if (info) wxStore.setGeo(key, info);
-            return info;
-        } catch { return null; } // сбой сети не кэшируем: следующая попытка повторит запрос
-        finally { geoPending.delete(key); }
-    })();
-    geoPending.set(key, req);
-    return req;
-}
-
-async function weather(lat, lon) {
-    const key = lat + ',' + lon, c = wxStore.wx(key);
-    if (c && Date.now() - c.at < WX_FRESH) return c;
-    const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&timezone=auto`);
-    if (d?.current?.temperature_2m == null) throw new Error('Weather data unavailable');
-    const w = { t: Math.round(d.current.temperature_2m), code: d.current.weather_code ?? 0, at: Date.now() };
-    wxStore.setWx(key, w);
-    return w;
 }
 
 function wxEmoji(code) {
@@ -987,31 +1031,122 @@ function wxEmoji(code) {
     return '⛈️';
 }
 
-/* Форматтер и DOM-элемент кэшируются в слоте: раньше каждую секунду
-   создавался новый Intl.DateTimeFormat и выполнялся querySelector. */
+function applyWxNode(elNode, w, statusHint = '') {
+    if (!elNode) return;
+    if (!w) {
+        elNode.textContent = '—';
+        if (statusHint) elNode.title = statusHint;
+        else elNode.removeAttribute('title');
+        return;
+    }
+    const mainTxt = `${formatTemp(w.t)} ${wxEmoji(w.code)}`;
+    if (clockOpts.wxDetails && (w.feels != null || w.wind != null)) {
+        const parts = [];
+        if (w.feels != null) parts.push(`ощущ. ${formatTemp(w.feels)}`);
+        if (w.wind != null) parts.push(`${Math.round(w.wind)} м/с`);
+        elNode.replaceChildren(
+            el('span', {}, mainTxt),
+            parts.length ? el('span', { class: 'wx-extra' }, parts.join(' • ')) : null
+        );
+    } else if (elNode.textContent !== mainTxt || elNode.children.length > 0) {
+        elNode.textContent = mainTxt;
+    }
+    const timeStr = w.at ? new Date(w.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
+    const extraTip = [];
+    if (w.feels != null) extraTip.push(`ощущается как ${formatTemp(w.feels)}`);
+    if (w.wind != null) extraTip.push(`ветер ${w.wind} м/с`);
+    elNode.title = [wxDesc(w.code), ...extraTip, timeStr ? 'обновлено в ' + timeStr : ''].filter(Boolean).join(' • ');
+}
+
+const geoPending = new Map();
+async function geocode(city) {
+    const key = typeof city === 'string' ? city.trim().toLowerCase() : '';
+    if (!key || key === '—') return { notFound: true };
+    if (geoCache.has(key)) return geoCache.get(key);
+    const saved = wxStore.geo(key) || wxStore.geo(city);
+    if (saved && typeof saved.lat === 'number') { geoCache.set(key, saved); return saved; }
+    if (geoPending.has(key)) return geoPending.get(key);
+    const req = (async () => {
+        try {
+            const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city.trim())}&count=1&language=ru&format=json`);
+            const g = d?.results?.[0];
+            if (!g) {
+                const nf = { notFound: true };
+                geoCache.set(key, nf);
+                return nf;
+            }
+            const info = { lat: g.latitude, lon: g.longitude, tz: g.timezone || null };
+            geoCache.set(key, info);
+            wxStore.setGeo(key, info);
+            return info;
+        } catch {
+            return null;
+        } finally { geoPending.delete(key); }
+    })();
+    geoPending.set(key, req);
+    return req;
+}
+
+async function weather(lat, lon) {
+    const key = lat + ',' + lon, c = wxStore.wx(key);
+    if (c && Date.now() - c.at < WX_FRESH && c.feels !== undefined) return c;
+    const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&wind_speed_unit=ms&timezone=auto`);
+    if (d?.current?.temperature_2m == null) throw new Error('Weather data unavailable');
+    const w = {
+        t: Math.round(d.current.temperature_2m),
+        feels: d.current.apparent_temperature != null ? Math.round(d.current.apparent_temperature) : null,
+        wind: d.current.wind_speed_10m != null ? Math.round(d.current.wind_speed_10m * 10) / 10 : null,
+        code: d.current.weather_code ?? 0,
+        at: Date.now()
+    };
+    wxStore.setWx(key, w);
+    return w;
+}
+
 function tick() {
     const now = new Date();
     for (let i = 0; i < clockSlots.length; i++) {
         const s = clockSlots[i];
+        if (s.hidden) continue;
         const elT = s.el || (s.el = $(i === 0 ? '#time-a' : '#time-b'));
         if (!elT) continue;
         let text;
+        const fmtOpts = clockOpts.seconds
+            ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+            : { hour: '2-digit', minute: '2-digit' };
         try {
             if (!s.fmt) {
                 try {
-                    s.fmt = new Intl.DateTimeFormat('ru-RU', {
-                        hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: s.tz || undefined
-                    });
+                    s.fmt = new Intl.DateTimeFormat('ru-RU', { ...fmtOpts, timeZone: s.tz || undefined });
                 } catch {
                     s.tz = null;
-                    s.fmt = new Intl.DateTimeFormat('ru-RU', {
-                        hour: '2-digit', minute: '2-digit', second: '2-digit'
-                    });
+                    s.fmt = new Intl.DateTimeFormat('ru-RU', fmtOpts);
                 }
             }
             text = s.fmt.format(now);
-        } catch { s.fmt = null; text = now.toLocaleTimeString('ru-RU'); }
+        } catch {
+            s.fmt = null;
+            text = now.toLocaleTimeString('ru-RU', fmtOpts);
+        }
         if (elT.textContent !== text) elT.textContent = text;
+
+        const elD = s.dateEl || (s.dateEl = $(i === 0 ? '#date-a' : '#date-b'));
+        if (elD) {
+            elD.hidden = !clockOpts.date;
+            if (clockOpts.date) {
+                try {
+                    if (!s.dateFmt) {
+                        s.dateFmt = new Intl.DateTimeFormat('ru-RU', {
+                            weekday: 'short', day: 'numeric', month: 'long', timeZone: s.tz || undefined
+                        });
+                    }
+                    const dTxt = s.dateFmt.format(now);
+                    if (elD.textContent !== dTxt) elD.textContent = dTxt;
+                } catch {
+                    elD.hidden = true;
+                }
+            }
+        }
     }
 }
 
@@ -1020,29 +1155,31 @@ async function refreshWeather() {
     const pending = new Map();
     let failed = false;
     await Promise.all(slots.map(async (s, i) => {
+        if (s.hidden) return;
         const wxEl = s.wxEl || (s.wxEl = $(i === 0 ? '#wx-a' : '#wx-b'));
         if (!wxEl) return;
-        // повторная попытка геокодинга, если при старте не было сети
         if (!s.geo && s.city && s.city !== '—') {
             s.geo = await geocode(s.city);
-            if (s.geo) { s.tz = s.geo.tz || null; s.fmt = null; }
+            if (s.geo && !s.geo.notFound) { s.tz = s.geo.tz || null; s.fmt = null; s.dateFmt = null; }
         }
         if (gen !== clockGen) return;
         const named = s.city && s.city !== '—';
-        if (!s.geo) { applyWxNode(wxEl, null); if (named) failed = true; return; }
+        if (!s.geo || s.geo.notFound) {
+            applyWxNode(wxEl, null, s.geo?.notFound && named ? 'Город не найден' : '');
+            if (named && !s.geo) failed = true;
+            return;
+        }
         const key = s.geo.lat + ',' + s.geo.lon;
         const cached = wxStore.wx(key);
         if (cached && Date.now() - cached.at < WX_STALE && gen === clockGen) applyWxNode(wxEl, cached);
         try {
-            // один и тот же город в обоих слотах — один запрос вместо двух
             if (!pending.has(key)) pending.set(key, weather(s.geo.lat, s.geo.lon));
             const w = await pending.get(key);
             if (gen === clockGen) applyWxNode(wxEl, w);
         } catch {
             failed = true;
-            // при сбое показываем последнюю известную погоду (до 6 ч), а не «—»
             const c = wxStore.wx(key);
-            if (gen === clockGen) applyWxNode(wxEl, c && Date.now() - c.at < WX_STALE ? c : null);
+            if (gen === clockGen) applyWxNode(wxEl, c && Date.now() - c.at < WX_STALE ? c : null, 'Ошибка сети');
         }
     }));
     if (gen !== clockGen) return;
@@ -1055,7 +1192,8 @@ window.addEventListener('online', () => { wxRetryN = 0; if (clocksReady && isPag
 function scheduleNextTick() {
     if (tickTimer) clearTimeout(tickTimer);
     if (!isPageActive() || !clockSlots.length) { tickTimer = null; return; }
-    const delay = 1005 - (Date.now() % 1000);
+    const period = clockOpts.seconds ? 1000 : 60000;
+    const delay = (period + 15) - (Date.now() % period);
     tickTimer = setTimeout(() => {
         tick();
         scheduleNextTick();
@@ -1079,7 +1217,6 @@ function startClockTimers() {
     }
 }
 
-/* Пока вкладка скрыта или окно свёрнуто — таймеры часов и погоды не тикают. */
 function syncClockTimers() {
     if (!isPageActive()) { if (tickTimer || wxTimer) stopClockTimers(); }
     else if (!tickTimer) startClockTimers();
@@ -1092,28 +1229,53 @@ async function initClocks(preloaded) {
     const s = preloaded || await store.getSettings();
     if (gen !== clockGen) return;
     const cities = s.cities || ['—', '—'];
-    clockCitiesSig = JSON.stringify(s.cities || []);
+    clockOpts = {
+        seconds: s.clockSeconds !== false,
+        date: !!s.clockDate,
+        wxUnit: s.wxUnit === 'F' ? 'F' : 'C',
+        wxDetails: !!s.wxDetails
+    };
+    clockConfigSig = JSON.stringify({ cities: s.cities || [], ...clockOpts });
+
+    const cityBEmpty = !(cities[1] || '').trim();
+    const cardB = $('#clock-card-b');
+    if (cardB) cardB.hidden = cityBEmpty;
+
     clockSlots = [0, 1].map(i => {
         const rawCity = (cities[i] || '').trim();
+        const hidden = i === 1 && cityBEmpty;
         const city = rawCity || '—';
         const nameEl = $(i === 0 ? '#city-a' : '#city-b');
         const wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
+        const dateEl = $(i === 0 ? '#date-a' : '#date-b');
         if (nameEl) nameEl.textContent = String(city).toUpperCase();
         const key = rawCity.toLowerCase();
         const savedGeo = key ? (geoCache.get(key) || wxStore.geo(key) || wxStore.geo(rawCity)) : null;
-        if (wxEl) {
-            const cw = savedGeo ? wxStore.wx(savedGeo.lat + ',' + savedGeo.lon) : null;
+        if (wxEl && !hidden) {
+            const cw = (savedGeo && !savedGeo.notFound) ? wxStore.wx(savedGeo.lat + ',' + savedGeo.lon) : null;
             applyWxNode(wxEl, cw && Date.now() - cw.at < WX_STALE ? cw : null);
         }
-        return { city, tz: savedGeo?.tz || null, geo: savedGeo || null, fmt: null, el: $(i === 0 ? '#time-a' : '#time-b'), wxEl };
+        return {
+            city,
+            hidden,
+            tz: savedGeo?.tz || null,
+            geo: savedGeo || null,
+            fmt: null,
+            dateFmt: null,
+            el: $(i === 0 ? '#time-a' : '#time-b'),
+            dateEl,
+            wxEl
+        };
     });
     tick();
     if (isPageActive()) scheduleNextTick();
     (async () => {
         await Promise.all(clockSlots.map(async sl => {
+            if (sl.hidden) return;
             sl.geo = await geocode(sl.city);
             sl.tz = sl.geo?.tz || null;
             sl.fmt = null;
+            sl.dateFmt = null;
         }));
         if (gen !== clockGen) return;
         clocksReady = true;
@@ -1135,6 +1297,19 @@ const ENGINES = {
     brave: { label: 'BS', name: 'Brave Search', url: 'https://search.brave.com/search?q=' }
 };
 
+const SEARCH_BANGS = {
+    '!g': { name: 'Google', url: 'https://www.google.com/search?q=' },
+    '!ddg': { name: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=' },
+    '!b': { name: 'Bing', url: 'https://www.bing.com/search?q=' },
+    '!y': { name: 'Яндекс', url: 'https://yandex.ru/search/?text=' },
+    '!ya': { name: 'Яндекс', url: 'https://yandex.ru/search/?text=' },
+    '!br': { name: 'Brave Search', url: 'https://search.brave.com/search?q=' },
+    '!yt': { name: 'YouTube', url: 'https://www.youtube.com/results?search_query=' },
+    '!gh': { name: 'GitHub', url: 'https://github.com/search?q=' },
+    '!w': { name: 'Wikipedia', url: 'https://ru.wikipedia.org/w/index.php?search=' },
+    '!tr': { name: 'Google Переводчик', url: 'https://translate.google.com/?sl=auto&tl=ru&text=' }
+};
+
 let engine = 'google', qHistory = [];
 const searchInput = () => $('#search-input');
 const suggestBox = () => $('#suggest');
@@ -1151,7 +1326,17 @@ const ICO_CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 const ICO_X = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 const ICO_FILL = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7L7 17M7 9v8h8"/></svg>';
 const ICO_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>';
+const ICO_LINK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
 let sugSel = -1;
+
+function parseBangQuery(raw) {
+    const m = raw.trim().match(/^(!\S+)(?:\s+(.*))?$/);
+    if (!m) return null;
+    const bang = m[1].toLowerCase();
+    const spec = SEARCH_BANGS[bang];
+    if (!spec) return null;
+    return { bang, name: spec.name, url: spec.url, query: (m[2] || '').trim() };
+}
 
 function agoLabel(id) {
     const t = Number(id); if (!t || t > Date.now()) return '';
@@ -1164,8 +1349,6 @@ function agoLabel(id) {
     return d < 30 ? d + ' дн' : '';
 }
 
-/* Разметка иконки разбирается один раз, дальше клонируется: раньше каждая строка подсказок
-   на каждое нажатие клавиши запускала DOMParser заново (до ~25 разборов на ввод). */
 const svgProto = new Map();
 function svgEl(markup, cls, title) {
     const s = el('span', { class: cls, title });
@@ -1185,26 +1368,85 @@ function markMatch(text, q) {
     return [text.slice(0, i), el('mark', {}, text.slice(i, i + q.length)), text.slice(i + q.length)];
 }
 
+function syncSearchClearBtn() {
+    const inp = searchInput(), clr = $('#search-clear');
+    if (inp && clr) clr.hidden = !inp.value.length;
+}
+
 function renderSuggest() {
     const box = suggestBox(), ul = suggestList(), inp = searchInput();
     if (!box || !ul || !inp) return;
+    syncSearchClearBtn();
     const raw = inp.value.trim(), q = raw.toLowerCase();
-    const items = qHistory.filter(h => !q || h.q.toLowerCase().includes(q)).slice(0, 8);
+    const s = settingsCache || DEFAULT_SETTINGS;
     sugSel = -1;
-    const rows = items.map((h, idx) => {
+    const rows = [];
+
+    // Поиск по собственным ярлыкам
+    if (q && s.searchShortcuts !== false && Array.isArray(categories)) {
+        const matchedSc = [];
+        for (const cat of categories) {
+            for (const sc of cat.shortcuts || []) {
+                const t = (sc.title || '').toLowerCase(), u = (sc.url || '').toLowerCase();
+                if (t.includes(q) || u.includes(q)) {
+                    matchedSc.push({ sc, catName: cat.name });
+                    if (matchedSc.length >= 4) break;
+                }
+            }
+            if (matchedSc.length >= 4) break;
+        }
+        matchedSc.forEach(({ sc, catName }, idx) => {
+            const fav = (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:'))) ? sc.icon : faviconOf(sc.url);
+            const icoWrap = fav
+                ? el('span', { class: 'ico' }, el('img', { src: fav, alt: '', onerror: e => e.target.replaceWith(document.createTextNode('🌐')) }))
+                : svgEl(ICO_LINK, 'ico');
+            rows.push(el('li', {
+                id: 'sg-opt-sc-' + idx,
+                class: 'sc-hit',
+                role: 'option',
+                'aria-selected': 'false',
+                dataset: { url: sc.url }
+            },
+            icoWrap,
+            el('span', { class: 'q' }, markMatch(sc.title || sc.url, q)),
+            el('span', { class: 'sg-tag' }, catName || 'Ярлык')));
+        });
+    }
+
+    const bangInfo = raw ? parseBangQuery(raw) : null;
+    const items = qHistory.filter(h => !q || h.q.toLowerCase().includes(q)).slice(0, 8);
+    if (raw && !items.some(h => h.q.toLowerCase() === q)) {
+        const labelText = bangInfo
+            ? (bangInfo.query ? `Искать «${bangInfo.query}» в ${bangInfo.name}` : `Введите запрос после ${bangInfo.bang} для поиска в ${bangInfo.name}`)
+            : `Искать «${raw}»`;
+        rows.push(el('li', {
+            id: 'sg-opt-go',
+            class: 'go',
+            role: 'option',
+            'aria-selected': 'false',
+            dataset: { hq: '' }
+        },
+        svgEl(ICO_SEARCH, 'ico'),
+        el('span', { class: 'q' }, labelText),
+        bangInfo ? el('span', { class: 'sg-tag' }, bangInfo.name) : null));
+    }
+
+    items.forEach((h, idx) => {
         const ago = agoLabel(h.id);
         const fill = svgEl(ICO_FILL, '', 'Вставить в поле');
         const del = svgEl(ICO_X, 'del', 'Удалить');
-        const li = el('li', { id: 'sg-opt-' + idx, role: 'option', 'aria-selected': 'false', dataset: { hid: h.id, hq: h.q } },
-                  svgEl(ICO_CLOCK, 'ico'), el('span', { class: 'q' }, markMatch(h.q, q)),
-                  ago ? el('span', { class: 'ago' }, ago) : null, el('span', { class: 'act' }, fill, del));
-        return li;
+        rows.push(el('li', {
+            id: 'sg-opt-' + idx,
+            role: 'option',
+            'aria-selected': 'false',
+            dataset: { hid: h.id, hq: h.q }
+        },
+        svgEl(ICO_CLOCK, 'ico'),
+        el('span', { class: 'q' }, markMatch(h.q, q)),
+        ago ? el('span', { class: 'ago' }, ago) : null,
+        el('span', { class: 'act' }, fill, del)));
     });
-    // при наборе — первой строкой быстрое действие «Искать …»
-    if (raw && !items.some(h => h.q.toLowerCase() === q)) {
-        rows.unshift(el('li', { id: 'sg-opt-go', class: 'go', role: 'option', 'aria-selected': 'false', dataset: { hq: '' } },
-                        svgEl(ICO_SEARCH, 'ico'), el('span', { class: 'q' }, 'Искать «' + raw + '»')));
-    }
+
     ul.replaceChildren(...rows);
     const open = rows.length > 0;
     box.hidden = !open;
@@ -1240,9 +1482,25 @@ function hideSuggest() {
     }
 }
 
-async function goSearch(newTab = false) {
+function navigateTo(targetUrl, forceNewTab = false) {
+    if (!targetUrl) return;
+    const openNew = forceNewTab || !!(settingsCache && settingsCache.openInNewTab);
+    if (openNew) window.open(targetUrl, '_blank', 'noopener');
+    else location.href = targetUrl;
+}
+
+async function goSearch(forceNewTab = false) {
     const inp = searchInput(); if (!inp) return;
     const raw = inp.value.trim(); if (!raw) return;
+
+    const bang = parseBangQuery(raw);
+    if (bang) {
+        if (!bang.query) { toast(`Введите запрос после ${bang.bang}`); return; }
+        hideSuggest();
+        navigateTo(bang.url + encodeURIComponent(bang.query), forceNewTab);
+        return;
+    }
+
     const asUrl = normalizeUrl(raw);
     const isUrl = /^https?:\/\//i.test(raw) || (asUrl !== '' && !raw.includes(' '));
     if (!isUrl) {
@@ -1252,8 +1510,7 @@ async function goSearch(newTab = false) {
     }
     hideSuggest();
     const targetUrl = isUrl ? asUrl : ENGINES[engine].url + encodeURIComponent(raw);
-    if (newTab) window.open(targetUrl, '_blank', 'noopener');
-    else location.href = targetUrl;
+    navigateTo(targetUrl, forceNewTab);
 }
 
 let searchBound = false;
@@ -1264,6 +1521,7 @@ async function initSearch(preloaded, history) {
     paintEngine();
     if (searchBound) return;
     searchBound = true;
+
     const cycleEngine = dir => {
         const keys = Object.keys(ENGINES);
         engine = keys[(keys.indexOf(engine) + dir + keys.length) % keys.length];
@@ -1273,14 +1531,37 @@ async function initSearch(preloaded, history) {
     const engBtn = $('#engine-btn');
     engBtn?.addEventListener('click', e => cycleEngine(e.shiftKey ? -1 : 1));
     engBtn?.addEventListener('contextmenu', e => { e.preventDefault(); cycleEngine(-1); });
-    searchInput()?.addEventListener('input', debounce(renderSuggest, 90));
+
+    const debouncedSuggest = debounce(renderSuggest, 90);
+    searchInput()?.addEventListener('input', () => {
+        syncSearchClearBtn();
+        debouncedSuggest();
+    });
     searchInput()?.addEventListener('focus', renderSuggest);
+    $('#search-clear')?.addEventListener('click', () => {
+        const inp = searchInput();
+        if (!inp) return;
+        inp.value = '';
+        syncSearchClearBtn();
+        inp.focus();
+        renderSuggest();
+    });
+
     searchInput()?.addEventListener('keydown', e => {
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (moveSuggest(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault(); return; }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (moveSuggest(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault();
+            return;
+        }
         if (e.key === 'Enter' && !e.isComposing) {
             const newTab = e.ctrlKey || e.metaKey || e.shiftKey;
             const li = sugSel >= 0 && !suggestBox().hidden ? suggestList().children[sugSel] : null;
             if (li) {
+                if (li.dataset.url) {
+                    e.preventDefault();
+                    hideSuggest();
+                    navigateTo(normalizeUrl(li.dataset.url), newTab);
+                    return;
+                }
                 if (li.dataset.hq) e.target.value = li.dataset.hq;
                 goSearch(newTab);
                 return;
@@ -1293,37 +1574,44 @@ async function initSearch(preloaded, history) {
                 hideSuggest();
             } else if (e.target.value) {
                 e.target.value = '';
-                renderSuggest();
+                syncSearchClearBtn();
             }
         }
     });
-    // История общая для всех открытых вкладок: без этого вкладка со старой копией затирает чужие запросы
-    apiStorage.onChanged((changes, area) => { if (area === 'local' && changes.history) qHistory = normalizeHistory(changes.history.newValue); });
-    // Делегированный обработчик кликов по suggest-list
+
+    apiStorage.onChanged((changes, area) => {
+        if (area === 'local' && changes.history) qHistory = normalizeHistory(changes.history.newValue);
+    });
+
     const sl = suggestList();
-    suggestBox()?.addEventListener('mousedown', e => e.preventDefault());
+    suggestBox()?.addEventListener('mousedown', e => {
+        if (e.target.closest('li, button')) e.preventDefault();
+    });
     if (sl && !sl._kbDelegated) {
         sl._kbDelegated = true;
         sl.addEventListener('click', e => {
             const li = e.target.closest('li');
             if (!li) return;
-            // кнопка «вставить»
+            if (li.dataset.url) {
+                hideSuggest();
+                navigateTo(normalizeUrl(li.dataset.url), e.ctrlKey || e.metaKey || e.shiftKey);
+                return;
+            }
             if (e.target.closest('[title="Вставить в поле"]')) {
                 e.stopPropagation();
                 const inp = searchInput();
                 if (inp && li.dataset.hq) { inp.value = li.dataset.hq; inp.focus(); renderSuggest(); }
                 return;
             }
-            // кнопка «удалить»
             if (e.target.closest('.del')) {
                 e.stopPropagation();
                 if (li.dataset.hid) {
                     qHistory = qHistory.filter(x => x.id !== li.dataset.hid);
-                    store.setHistory(qHistory); renderSuggest();
+                    store.setHistory(qHistory);
+                    renderSuggest();
                 }
                 return;
             }
-            // клик по строке — поиск
             if (li.dataset.hq) {
                 const inp = searchInput();
                 if (inp) inp.value = li.dataset.hq;
@@ -1333,7 +1621,11 @@ async function initSearch(preloaded, history) {
     }
     $('#search-go')?.addEventListener('click', e => goSearch(e.ctrlKey || e.metaKey || e.shiftKey));
     $('#search-go')?.addEventListener('auxclick', e => { if (e.button === 1) { e.preventDefault(); goSearch(true); } });
-    $('#clear-history')?.addEventListener('click', async () => { qHistory = []; await store.setHistory([]); renderSuggest(); });
+    $('#clear-history')?.addEventListener('click', async () => {
+        qHistory = [];
+        await store.setHistory([]);
+        renderSuggest();
+    });
     document.addEventListener('click', e => { if (!e.target.closest('.search-row')) hideSuggest(); });
 }
 
@@ -1341,11 +1633,6 @@ async function initSearch(preloaded, history) {
 let categories = [];
 let scModal = { catId: null, scId: null };
 
-/* Каждое сохранение вызывало отрисовку дважды (saveCats + storage.onChanged в той же вкладке).
-   Параллельные вызовы склеиваются в один (с повтором, если данные успели измениться), а данные,
-   которые уже на экране (catsSig), повторно не рисуются.
-   Флаг catsBusy отдельный от промиса: при синхронном проходе (данные переданы, await не нужен)
-   finally выполнялся ДО присвоения промиса, и «зависший» промис блокировал все последующие отрисовки. */
 let catsBusy = false, catsDirty = false, catsPending = null, catsRun = Promise.resolve(), catsSig = '';
 function renderCats(data) {
     const sig = Array.isArray(data) ? JSON.stringify(data) : null;
@@ -1378,75 +1665,49 @@ function renderCats(data) {
 }
 
 function buildCard(cat) {
-    const card = el('div', { class: 'cat-card', dataset: { id: cat.id } });
+    const card = el('div', {
+        class: ['cat-card', cat.collapsed ? 'collapsed' : ''],
+        dataset: { id: cat.id }
+    });
 
     let icoNode;
     if (cat.image) {
-        icoNode = el('img', { class: 'cat-ico cat-ico-img', src: cat.image, alt: '', draggable: 'false',
-            onerror: e => e.target.replaceWith(el('span', { class: 'cat-ico' }, cat.icon || '')) });
+        icoNode = el('img', {
+            class: 'cat-ico cat-ico-img', src: cat.image, alt: '', draggable: 'false',
+            onerror: e => e.target.replaceWith(el('span', { class: 'cat-ico' }, cat.icon || ''))
+        });
     } else {
         icoNode = el('span', { class: 'cat-ico' }, cat.icon || '');
     }
 
-    const head = el('div', { class: 'cat-head', title: 'Перетащите для сортировки • ПКМ — изменить категорию' },
-                    icoNode,
-                    el('span', { class: 'cat-name', title: cat.name }, cat.name),
-                    el('button', { class: 'cat-add', type: 'button', title: 'Добавить ярлык', 'aria-label': 'Добавить ярлык в «' + cat.name + '»' }, '＋')
-    );
-    card.addEventListener('dragover', e => {
-        if (!dragState || dragState.type !== 'chip') return;
-        e.preventDefault(); e.dataTransfer.dropEffect = 'move';
-        if (!card.classList.contains('drag-over')) card.classList.add('drag-over');
-        const t = e.target.closest && e.target.closest('.chip');
-        if (dragState.lastTarget !== t) {
-            if (dragState.lastTarget) dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
-            dragState.lastTarget = (t && t.dataset.id !== dragState.id) ? t : null;
-            dragState.lastRect = dragState.lastTarget ? dragState.lastTarget.getBoundingClientRect() : null;
-            dragState.lastAfter = null;
-        }
-        if (dragState.lastTarget && dragState.lastRect) {
-            const after = e.clientX > dragState.lastRect.left + dragState.lastRect.width / 2;
-            if (after !== dragState.lastAfter) {
-                dragState.lastAfter = after;
-                dragState.lastTarget.classList.toggle('chip-drop-after', after);
-                dragState.lastTarget.classList.toggle('chip-drop-before', !after);
-            }
-        }
-    });
-    card.addEventListener('dragleave', e => {
-        if (!card.contains(e.relatedTarget)) {
-            card.classList.remove('drag-over');
-            if (dragState?.lastTarget) {
-                dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
-                dragState.lastTarget = null;
-                dragState.lastRect = null;
-                dragState.lastAfter = null;
-            }
-        }
-    });
-    card.addEventListener('drop', e => {
-        const dr = dragState;
-        if (!dr || dr.type !== 'chip') return;   // перенос категорий обрабатывает контейнер #cats
-        e.preventDefault(); e.stopPropagation(); clearDrag();
-        const t = e.target.closest && e.target.closest('.chip');
-        let after = false;
-        if (t) { const r = t.getBoundingClientRect(); after = e.clientX > r.left + r.width / 2; }
-        moveChip(dr.catId, dr.id, cat.id, t && t.dataset.id, after);
-    });
-        const chips = el('div', { class: 'chips' });
-        (cat.shortcuts || []).forEach(sc => chips.append(buildChip(cat, sc)));
-        card.append(head, chips);
-        return card;
+    const head = el('div', {
+        class: 'cat-head',
+        title: 'Перетащите для сортировки • Двойной клик — свернуть • ПКМ — изменить категорию'
+    },
+    icoNode,
+    el('span', { class: 'cat-name', title: cat.name }, cat.name),
+    el('button', {
+        class: 'cat-add', type: 'button',
+        title: 'Добавить ярлык',
+        'aria-label': 'Добавить ярлык в «' + cat.name + '»'
+    }, '＋'));
+
+    const chips = el('div', { class: 'chips' });
+    (cat.shortcuts || []).forEach(sc => chips.append(buildChip(cat, sc)));
+    card.append(head, chips);
+    return card;
 }
 
 let dragState = null;
 function clearDrag() {
     dragState = null;
-    document.querySelectorAll('.dragging,.drag-over,.chip-drop-before,.chip-drop-after').forEach(n => n.classList.remove('dragging', 'drag-over', 'chip-drop-before', 'chip-drop-after'));
+    document.body.classList.remove('chip-dragging');
+    document.querySelectorAll('.dragging,.drag-over,.chip-drop-before,.chip-drop-after').forEach(n =>
+        n.classList.remove('dragging', 'drag-over', 'chip-drop-before', 'chip-drop-after')
+    );
 }
 
 function buildChip(cat, sc) {
-    // draggable="true" задан явно: пустое значение атрибута (draggable: true) по спецификации означает auto, а у div это «не перетаскивается»
     const chip = el('div', {
         class: 'chip', draggable: 'true', tabindex: 0, role: 'link',
         'aria-label': sc.title || sc.url || 'Ярлык',
@@ -1488,11 +1749,10 @@ function moveChip(from, scId, to, targetId, after) {
     const t = targetId ? d.shortcuts.findIndex(x => x.id === targetId) : -1;
     if (t !== -1) pos = t + (after ? 1 : 0);
     d.shortcuts.splice(pos, 0, sc);
+    if (d.collapsed) d.collapsed = false;
     saveCats();
 }
 
-/* Перенос категорий: карточки переставляются прямо под курсором (с плавной FLIP-анимацией),
-   а порядок сохраняется один раз при отпускании. */
 function flipReorder(wrap, mutate, skipNode) {
     const cards = [...wrap.children].filter(c => c !== skipNode);
     const first = new Map(cards.map(c => [c, c.getBoundingClientRect()]));
@@ -1510,9 +1770,6 @@ function flipReorder(wrap, mutate, skipNode) {
     }
 }
 
-/* Перенос категории: тянем за шапку; под курсором — плейсхолдер, остальные карточки
-   расступаются с FLIP-анимацией, порядок сохраняется один раз при отпускании.
-   Позиционирование через transform: translate3d + requestAnimationFrame исключает layout thrashing на 240 Гц. */
 function startCatDrag(e, card, head) {
     if (e.button !== 0 || e.target.closest('button')) return;
     const wrap = card.parentElement, sx = e.clientX, sy = e.clientY, pid = e.pointerId;
@@ -1555,7 +1812,7 @@ function startCatDrag(e, card, head) {
                 position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px',
                 height: r.height + 'px', zIndex: 60, pointerEvents: 'none', margin: 0, willChange: 'transform'
             });
-            const r2 = card.getBoundingClientRect();           // если у предка есть transform — компенсируем сдвиг
+            const r2 = card.getBoundingClientRect();
             baseX = r.left - (r2.left - r.left);
             baseY = r.top - (r2.top - r.top);
             card.style.left = baseX + 'px';
@@ -1627,7 +1884,6 @@ function updateIconPreview(iconValue, urlValue) {
     }
 }
 
-/* Выбор картинки с диском и уменьшение до max px; null — выбор отменён или файл не прочитался. */
 function pickImage(max) {
     return new Promise(resolve => {
         const input = el('input', { type: 'file', accept: 'image/*' });
@@ -1664,15 +1920,20 @@ function openScModal(catId, scId) {
     toggleOverlay($('#sc-modal'), true, '#sc-name');
 }
 
-/* Диалоги: фокус переходит в диалог, остальная страница недоступна по Tab (inert),
-   после закрытия фокус возвращается туда, откуда диалог открыли. */
 let overlayReturn = null;
 function toggleOverlay(ov, open, focusSel = '.close-btn') {
     if (!ov || ov.hidden === !open) return;
     ov.hidden = !open;
     for (const n of document.querySelectorAll('.topbar,.panel')) n.inert = open;
-    if (open) { overlayReturn = document.activeElement; ov.querySelector(focusSel)?.focus(); }
-    else { overlayReturn?.focus?.(); overlayReturn = null; }
+    if (open) {
+        overlayReturn = document.activeElement;
+        ov.querySelector(focusSel)?.focus({ preventScroll: true });
+        const body = ov.querySelector('.modal-body');
+        if (body) body.scrollTop = 0;
+    } else {
+        overlayReturn?.focus?.({ preventScroll: true });
+        overlayReturn = null;
+    }
 }
 const closeOverlays = () => document.querySelectorAll('.overlay:not([hidden])').forEach(ov => toggleOverlay(ov, false));
 
@@ -1687,7 +1948,6 @@ function bindScModal() {
         e.preventDefault();
         const cat = categories.find(c => c.id === scModal.catId); if (!cat) return;
         const normUrl = normalizeUrl($('#sc-url')?.value);
-        // нераспознанный адрес раньше сохранялся «как есть», и плитка молча не открывалась
         if (!normUrl) { toast('Не похоже на адрес сайта. Пример: example.com', 'error'); return; }
         let title = ($('#sc-name')?.value || '').trim();
         if (!title) {
@@ -1738,7 +1998,7 @@ function bindScModal() {
 }
 
 const CAT_EMOJIS = ['🌐','🎵','🎮','💻','🛒','📚','🎨','📰','🏠','📱','🔧','💎','🚀','🎯','☕','📺','🌙','⭐','🎬','🧩'];
-let catModal = { id: null, image: '' };   // image — черновик, в категорию попадёт при сохранении
+let catModal = { id: null, image: '' };
 
 function renderCatImage() {
     const img = $('#cat-img-preview'), has = !!catModal.image;
@@ -1748,7 +2008,6 @@ function renderCatImage() {
     $('#cat-img-hint').textContent = has ? 'Картинка показывается вместо эмодзи' : 'Без картинки показывается эмодзи';
 }
 
-/* id === null — новая категория */
 function openCatModal(id) {
     const cat = categories.find(c => c.id === id);
     catModal = { id: cat ? cat.id : null, image: cat?.image || '' };
@@ -1760,11 +2019,10 @@ function openCatModal(id) {
     toggleOverlay($('#cat-modal'), true, '#cat-name');
 }
 
-function openChipUrl(chip, newTab) {
+function openChipUrl(chip, forceNewTab) {
     const u = normalizeUrl(chip.dataset.url);
     if (!u) return;
-    if (newTab) window.open(u, '_blank', 'noopener');
-    else location.href = u;
+    navigateTo(u, forceNewTab);
 }
 
 let catModalBound = false;
@@ -1783,6 +2041,18 @@ function bindCatModal() {
             }
             const chip = e.target.closest('.chip');
             if (chip) openChipUrl(chip, e.ctrlKey || e.metaKey || e.shiftKey);
+        });
+        wrap.addEventListener('dblclick', e => {
+            const head = e.target.closest('.cat-head');
+            if (!head || e.target.closest('button')) return;
+            const card = head.closest('.cat-card');
+            if (!card) return;
+            const cat = categories.find(c => c.id === card.dataset.id);
+            if (!cat) return;
+            cat.collapsed = !cat.collapsed;
+            card.classList.toggle('collapsed', cat.collapsed);
+            catsSig = JSON.stringify(categories);
+            store.setCategories(categories);
         });
         wrap.addEventListener('auxclick', e => {
             if (e.button !== 1) return;
@@ -1827,7 +2097,62 @@ function bindCatModal() {
             dragState = { type: 'chip', catId: card.dataset.id, id: chip.dataset.id };
             e.dataTransfer.setData('text/plain', 'chip');
             e.dataTransfer.effectAllowed = 'move';
-            setTimeout(() => chip.classList.add('dragging'), 0);
+            setTimeout(() => {
+                chip.classList.add('dragging');
+                document.body.classList.add('chip-dragging');
+            }, 0);
+        });
+        wrap.addEventListener('dragover', e => {
+            if (!dragState || dragState.type !== 'chip') return;
+            const card = e.target.closest('.cat-card');
+            if (!card) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (!card.classList.contains('drag-over')) {
+                wrap.querySelectorAll('.cat-card.drag-over').forEach(c => { if (c !== card) c.classList.remove('drag-over'); });
+                card.classList.add('drag-over');
+            }
+            const t = e.target.closest('.chip');
+            if (dragState.lastTarget !== t) {
+                if (dragState.lastTarget) dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
+                dragState.lastTarget = (t && t.dataset.id !== dragState.id) ? t : null;
+                dragState.lastRect = dragState.lastTarget ? dragState.lastTarget.getBoundingClientRect() : null;
+                dragState.lastAfter = null;
+            }
+            if (dragState.lastTarget && dragState.lastRect) {
+                const after = e.clientX > dragState.lastRect.left + dragState.lastRect.width / 2;
+                if (after !== dragState.lastAfter) {
+                    dragState.lastAfter = after;
+                    dragState.lastTarget.classList.toggle('chip-drop-after', after);
+                    dragState.lastTarget.classList.toggle('chip-drop-before', !after);
+                }
+            }
+        });
+        wrap.addEventListener('dragleave', e => {
+            if (!dragState || dragState.type !== 'chip') return;
+            const card = e.target.closest('.cat-card');
+            if (card && !card.contains(e.relatedTarget)) {
+                card.classList.remove('drag-over');
+                if (dragState.lastTarget && card.contains(dragState.lastTarget)) {
+                    dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
+                    dragState.lastTarget = null;
+                    dragState.lastRect = null;
+                    dragState.lastAfter = null;
+                }
+            }
+        });
+        wrap.addEventListener('drop', e => {
+            const dr = dragState;
+            if (!dr || dr.type !== 'chip') return;
+            const card = e.target.closest('.cat-card');
+            if (!card) return;
+            e.preventDefault();
+            e.stopPropagation();
+            clearDrag();
+            const t = e.target.closest('.chip');
+            let after = false;
+            if (t) { const r = t.getBoundingClientRect(); after = e.clientX > r.left + r.width / 2; }
+            moveChip(dr.catId, dr.id, card.dataset.id, t && t.dataset.id, after);
         });
         wrap.addEventListener('dragend', e => {
             if (e.target.closest('.chip')) clearDrag();
@@ -1836,12 +2161,12 @@ function bindCatModal() {
     $('#add-cat')?.addEventListener('click', () => openCatModal(null));
     $('#cat-form')?.addEventListener('submit', e => {
         e.preventDefault();
-        const name = $('#cat-name').value.trim().toUpperCase();
+        const name = $('#cat-name').value.trim();
         if (!name) return;
         const fields = { name, icon: $('#cat-icon').value.trim(), image: catModal.image };
         const cat = categories.find(c => c.id === catModal.id);
         if (cat) Object.assign(cat, fields);
-        else categories.push({ id: uid(), shortcuts: [], ...fields });
+        else categories.push({ id: uid(), collapsed: false, shortcuts: [], ...fields });
         toggleOverlay($('#cat-modal'), false);
         saveCats();
         toast(cat ? 'Категория обновлена' : 'Категория добавлена');
@@ -1864,7 +2189,8 @@ function bindCatModal() {
 /* ---------- 11. Настройки ---------- */
 const on = (id, ev, fn) => { const e = document.getElementById(id); if (e) e.addEventListener(ev, fn); return e; };
 const val = (id, v) => { const e = document.getElementById(id); if (e) { e.value = v; if (e.type === 'range') paintRange(e); } };
-/* Заливка трека слайдера до текущего значения (переменная --p) */
+const chk = (id, v) => { const e = document.getElementById(id); if (e) e.checked = Boolean(v); };
+
 function paintRange(e) {
     const mn = +e.min || 0, mx = +e.max || 100;
     e.style.setProperty('--p', ((e.value - mn) / (mx - mn || 1) * 100) + '%');
@@ -1896,12 +2222,10 @@ function downscaleImage(file, max = 256) {
     });
 }
 
-/* Новое значение считается внутри очереди store.updateSettings, от актуальных данных хранилища:
-   раньше оно считалось от копии, снятой при открытии настроек, и откатывало правки из других вкладок. */
 const resolveValue = (v, prev) => typeof v === 'function' ? v(prev) : v;
 
 async function updateSetting(key, valueOrFn) {
-    await store.updateSettings(s => ({ ...s, [key]: resolveValue(valueOrFn, s[key]) }));
+    return store.updateSettings(s => ({ ...s, [key]: resolveValue(valueOrFn, s[key]) }));
 }
 
 async function updateAppearanceSetting(key, valueOrFn) {
@@ -1915,6 +2239,7 @@ async function setCustomColor(hex) {
     appliedTheme = 'custom';
     applyCustomThemeVars(hex);
     const sel = $('#theme-select'); if (sel) sel.value = 'custom';
+    syncThemeSwatches('custom');
 }
 
 const LIVE_SLIDER_VARS = {
@@ -1988,7 +2313,7 @@ function invalidateRuntimeState() {
     appliedTheme = null;
     bgMediaSig = '';
     bgAppliedSig = '';
-    clockCitiesSig = '';
+    clockConfigSig = '';
     if (bgObjectUrl) {
         try { URL.revokeObjectURL(bgObjectUrl); } catch {}
         bgObjectUrl = null;
@@ -1999,20 +2324,30 @@ function invalidateRuntimeState() {
 function syncSettingsUI(s) {
     const d = DEFAULT_SETTINGS.appearance;
     val('theme-select', s.theme || 'rose');
+    syncThemeSwatches(s.theme || 'rose');
     val('set-title', s.title || '');
     val('set-subtitle', s.subtitle || '');
+    chk('set-smart-greeting', s.smartGreeting);
     val('set-city-a', s.cities?.[0] || '');
     val('set-city-b', s.cities?.[1] || '');
+
+    chk('set-clock-seconds', s.clockSeconds !== false);
+    chk('set-clock-date', s.clockDate);
+    val('set-wx-unit', s.wxUnit || 'C');
+    chk('set-wx-details', s.wxDetails);
+    chk('set-open-newtab', s.openInNewTab);
+    chk('set-search-shortcuts', s.searchShortcuts !== false);
+    chk('set-num-hotkeys', s.numHotkeys);
+    chk('set-hide-add-cat', s.hideAddCat);
 
     const bg = s.bg || {};
     val('set-bg-type', bg.type || 'none');
     val('set-bg-url', bg.url || '');
-    val('set-bg-opacity', bg.opacity ?? 100); txt('set-bg-opacity-val', (bg.opacity ?? 100) + '%');
-   
+    setSlider('set-bg-opacity', bg.opacity ?? 100, 'set-bg-opacity-val', '%');
 
     const app = s.appearance || {};
-    val('set-panel-opacity', app.panelOpacity ?? d.panelOpacity); txt('set-panel-opacity-val', (app.panelOpacity ?? d.panelOpacity) + '%');
-    val('set-card-opacity', app.cardOpacity ?? d.cardOpacity); txt('set-card-opacity-val', (app.cardOpacity ?? d.cardOpacity) + '%');
+    setSlider('set-panel-opacity', app.panelOpacity ?? d.panelOpacity, 'set-panel-opacity-val', '%');
+    setSlider('set-card-opacity', app.cardOpacity ?? d.cardOpacity, 'set-card-opacity-val', '%');
     setSlider('set-panel-blur', app.panelBlur ?? d.panelBlur, 'set-panel-blur-val', 'px');
     setSlider('set-history-blur', app.historyBlur ?? d.historyBlur, 'set-history-blur-val', 'px');
     setSlider('set-history-opacity', app.historyOpacity ?? d.historyOpacity, 'set-history-opacity-val', '%');
@@ -2036,8 +2371,7 @@ function syncSettingsUI(s) {
     setSlider('set-ls-title', f.titleSpacing ?? d.font.titleSpacing, 'set-ls-title-val', 'em');
     setSlider('set-ls-sub', f.subtitleSpacing ?? d.font.subtitleSpacing, 'set-ls-sub-val', 'em');
 
-    const anim = document.getElementById('set-animations');
-    if (anim) anim.checked = app.animations !== false;
+    chk('set-animations', app.animations !== false);
     setSlider('set-transition-speed', app.transitionSpeed ?? d.transitionSpeed, 'set-transition-speed-val', 's');
 
     const cc = (s.customColor || '#ff4fa3').toLowerCase();
@@ -2049,12 +2383,11 @@ function syncSettingsUI(s) {
 async function applyEverything() {
     const s = await store.getSettings();
     s.bg = await repairBgMedia(s);
-    await applyTheme(s.theme, false);
-    if (s.theme === 'custom') applyCustomThemeVars(s.customColor);
+    await applyTheme(s.theme, false, s.customColor);
     applyAppearance(s.appearance);
+    applyLayoutPreferences(s);
     await applyBackground(s);
-    paintTitle(s);
-    const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
+    paintTitleAndSubtitle(s);
     paintAvatar(s.avatar || '', s.title);
     initThemeSelector(s.theme);
     engine = ENGINES[s.engine] ? s.engine : 'google';
@@ -2071,6 +2404,7 @@ function bindSettings() {
     if (settingsBound) return;
     settingsBound = true;
     on('settings-btn', 'click', openSettings);
+
     document.querySelectorAll('.overlay').forEach(ov => {
         ov.addEventListener('click', e => { if (e.target === ov) toggleOverlay(ov, false); });
         ov.addEventListener('keydown', e => {
@@ -2094,21 +2428,51 @@ function bindSettings() {
     });
 
     on('set-title', 'input', debounce(async e => {
-        await updateSetting('title', e.target.value);
-        paintTitle({ title: e.target.value });
-    }, 300));
+        const next = await updateSetting('title', e.target.value);
+        paintTitleAndSubtitle(next);
+    }, 250));
 
     on('set-subtitle', 'input', debounce(async e => {
-        await updateSetting('subtitle', e.target.value);
-        txt('subtitle', e.target.value);
-    }, 300));
+        const next = await updateSetting('subtitle', e.target.value);
+        paintTitleAndSubtitle(next);
+    }, 250));
+
+    on('set-smart-greeting', 'change', async e => {
+        const next = await updateSetting('smartGreeting', e.target.checked);
+        paintTitleAndSubtitle(next);
+    });
 
     const cityHandler = idx => debounce(async e => {
-        await updateSetting('cities', prev => { const c = (prev || []).slice(); c[idx] = e.target.value; return c; });
-        initClocks();
-    }, 500);
+        const next = await updateSetting('cities', prev => { const c = (prev || []).slice(); c[idx] = e.target.value; return c; });
+        initClocks(next);
+    }, 450);
     on('set-city-a', 'input', cityHandler(0));
     on('set-city-b', 'input', cityHandler(1));
+
+    on('set-clock-seconds', 'change', async e => {
+        const next = await updateSetting('clockSeconds', e.target.checked);
+        initClocks(next);
+    });
+    on('set-clock-date', 'change', async e => {
+        const next = await updateSetting('clockDate', e.target.checked);
+        initClocks(next);
+    });
+    on('set-wx-unit', 'change', async e => {
+        const next = await updateSetting('wxUnit', e.target.value);
+        initClocks(next);
+    });
+    on('set-wx-details', 'change', async e => {
+        const next = await updateSetting('wxDetails', e.target.checked);
+        initClocks(next);
+    });
+
+    on('set-open-newtab', 'change', e => updateSetting('openInNewTab', e.target.checked));
+    on('set-search-shortcuts', 'change', e => updateSetting('searchShortcuts', e.target.checked));
+    on('set-num-hotkeys', 'change', e => updateSetting('numHotkeys', e.target.checked));
+    on('set-hide-add-cat', 'change', async e => {
+        const next = await updateSetting('hideAddCat', e.target.checked);
+        applyLayoutPreferences(next);
+    });
 
     on('set-avatar', 'change', async e => {
         const f = e.target.files[0]; if (!f) return;
@@ -2126,8 +2490,8 @@ function bindSettings() {
     });
 
     on('set-bg-type', 'change', async e => {
-        await updateSetting('bg', prev => ({ ...prev, type: e.target.value }));
-        await applyBackground();
+        const next = await updateSetting('bg', prev => ({ ...prev, type: e.target.value }));
+        await applyBackground(next);
     });
     on('set-bg-file', 'change', async e => {
         const f = e.target.files[0]; if (!f) return;
@@ -2135,9 +2499,9 @@ function bindSettings() {
             const type = f.type.indexOf('video') === 0 ? 'video' : 'image';
             const mediaBlob = type === 'image' ? await compressImageBlob(f, 2560) : f;
             await mediaPut(MEDIA_KEY, mediaBlob);
-            await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
+            const next = await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
             val('set-bg-type', type); val('set-bg-url', '');
-            await applyBackground(); toast('Фон обновлён');
+            await applyBackground(next); toast('Фон обновлён');
         } catch (err) {
             console.error('[KOCH] bg save:', err);
             toast('Не удалось сохранить файл фона', 'error');
@@ -2146,9 +2510,9 @@ function bindSettings() {
     });
     on('set-bg-url', 'change', async e => {
         const u = e.target.value.trim();
-        await updateSetting('bg', prev => u ? { ...prev, url: u, idb: '' } : { ...prev, url: '' });
+        const next = await updateSetting('bg', prev => u ? { ...prev, url: u, idb: '' } : { ...prev, url: '' });
         if (u) mediaDel(MEDIA_KEY).catch(err => console.warn('[KOCH] media del:', err));
-        await applyBackground(); toast('Фон обновлён');
+        await applyBackground(next); toast('Фон обновлён');
     });
     const saveBgOp = debounce(async v => {
         await updateSetting('bg', prev => ({ ...prev, opacity: v }));
@@ -2185,7 +2549,7 @@ function bindSettings() {
     bindSlider('set-ls-sub', 'font.subtitleSpacing', 'set-ls-sub-val', 'em', 0.01);
     on('set-animations', 'change', e => updateAppearanceSetting('animations', e.target.checked));
     bindSlider('set-transition-speed', 'transitionSpeed', 'set-transition-speed-val', 's', 0.01);
-    // заливка трека для всех слайдеров окна настроек одним делегированным обработчиком + двойной клик для сброса к дефолту
+
     const setOv = document.getElementById('settings-overlay');
     setOv?.addEventListener('input', e => { if (e.target.type === 'range') paintRange(e.target); });
     setOv?.addEventListener('dblclick', e => {
@@ -2197,7 +2561,7 @@ function bindSettings() {
     });
 
     on('set-custom-color', 'input', debounce(e => {
-        const hex = e.target.value;
+        const hex = e.target.value.toLowerCase();
         val('set-custom-hex', hex);
         setCustomColor(hex);
     }, 80));
@@ -2215,7 +2579,7 @@ function bindSettings() {
         setCustomColor(hex);
     });
 
-    /* ====== ЭКСПОРТ: всегда полный профиль (настройки, категории, картинки, история, фон) ====== */
+    /* ====== ЭКСПОРТ ====== */
     on('export-btn', 'click', async () => {
         try {
             const json = await store.exportAll({ includeMedia: true });
@@ -2233,7 +2597,7 @@ function bindSettings() {
         }
     });
 
-    /* ====== ИМПОРТ: валидация + применение без перезагрузки ====== */
+    /* ====== ИМПОРТ ====== */
     on('import-btn', 'change', async e => {
         const f = e.target.files[0];
         e.target.value = '';
@@ -2258,7 +2622,10 @@ function bindSettings() {
     });
 }
 
-function setSlider(inputId, value, valueId, suffix) { val(inputId, value); txt(valueId, (typeof value === 'number' && value % 1 !== 0 ? value.toFixed(2) : value) + suffix); }
+function setSlider(inputId, value, valueId, suffix) {
+    val(inputId, value);
+    txt(valueId, (typeof value === 'number' && value % 1 !== 0 ? value.toFixed(2) : value) + suffix);
+}
 
 async function openSettings() {
     syncSettingsUI(await store.getSettings());
@@ -2273,12 +2640,31 @@ window.addEventListener('error', e => {
 window.addEventListener('unhandledrejection', e => console.error('[KOCH] Rejection:', e.reason));
 
 function initThemeSelector(cur) {
-    const sel = $('#theme-select'); if (!sel) return;
-    if (!sel.options.length) {
-        sel.append(...Object.entries(THEMES).map(([id, name]) => el('option', { value: id }, name)));
-        sel.addEventListener('change', () => applyTheme(sel.value, true));
+    const sel = $('#theme-select');
+    if (sel) {
+        if (!sel.options.length) {
+            sel.append(...Object.entries(THEMES).map(([id, name]) => el('option', { value: id }, name)));
+            sel.addEventListener('change', () => applyTheme(sel.value, true));
+        }
+        sel.value = cur;
     }
-    sel.value = cur;
+    const swatches = $('#theme-swatches');
+    if (swatches && !swatches.children.length) {
+        swatches.append(...Object.entries(THEMES).map(([id, name]) =>
+            el('button', {
+                type: 'button',
+                class: ['swatch-btn', id === cur ? 'active' : ''],
+                role: 'radio',
+                'aria-checked': String(id === cur),
+                dataset: { swatch: id },
+                onClick: () => applyTheme(id, true)
+            },
+            el('span', { class: 'swatch-dot', style: { background: THEME_SWATCH_COLORS[id] || '#ff4fa3' } }),
+            name)
+        ));
+    } else {
+        syncThemeSwatches(cur);
+    }
 }
 
 let keysBound = false;
@@ -2286,14 +2672,34 @@ function bindKeys() {
     if (keysBound) return;
     keysBound = true;
     document.addEventListener('keydown', e => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); const inp = searchInput(); if (inp) { inp.focus(); inp.select(); } return; }
-        if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); return; }
-        if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            const tag = document.activeElement?.tagName;
-            if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !document.querySelector('.overlay:not([hidden])')) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+            e.preventDefault();
+            const inp = searchInput();
+            if (inp) { inp.focus(); inp.select(); }
+            return;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+            e.preventDefault();
+            openSettings();
+            return;
+        }
+        const tag = document.activeElement?.tagName;
+        const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+        const hasModal = !!document.querySelector('.overlay:not([hidden])');
+        if (!inInput && !hasModal && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (e.key === '/') {
                 e.preventDefault();
                 searchInput()?.focus();
                 return;
+            }
+            if (settingsCache?.numHotkeys && /^[1-9]$/.test(e.key)) {
+                const idx = parseInt(e.key, 10) - 1;
+                const allChips = [...document.querySelectorAll('#cats .cat-card:not(.collapsed) .chip')];
+                if (allChips[idx]) {
+                    e.preventDefault();
+                    openChipUrl(allChips[idx], e.shiftKey);
+                    return;
+                }
             }
         }
         if (e.key === 'Escape') {
@@ -2306,20 +2712,18 @@ function bindKeys() {
 async function boot() {
     const start = performance.now();
     try {
-        // одно обращение к хранилищу вместо трёх последовательных
         const { settings: s, categories: cats, history } = await store.boot();
         s.bg = await repairBgMedia(s);
-        await applyTheme(s.theme, false);
+        await applyTheme(s.theme, false, s.customColor);
         applyAppearance(s.appearance);
-        paintTitle(s);
-        const sub = $('#subtitle'); if (sub) sub.textContent = s.subtitle || '';
+        applyLayoutPreferences(s);
+        paintTitleAndSubtitle(s);
         paintAvatar(s.avatar || '', s.title);
         initThemeSelector(s.theme);
 
         setupVideoVisibility();
         initClocks(s);
 
-        // фон (IndexedDB, видео) подгружается параллельно и не задерживает первый показ интерфейса
         applyBackground(s);
         const searchReady = initSearch(s, history);
         bindCatModal(); bindScModal(); bindSettings(); bindKeys();
@@ -2327,21 +2731,26 @@ async function boot() {
 
         const sync = debounce(async next => {
             if (!next) return;
-            // изменение пришло от этой же вкладки и уже применено - повторно не трогаем DOM
             const sig = JSON.stringify(next);
             if (sig === store.sig) return;
             store.sig = sig;
-            await applyTheme(next.theme, false);
-            if (next.theme === 'custom') applyCustomThemeVars(next.customColor);   // цвет мог измениться в другой вкладке
+            await applyTheme(next.theme, false, next.customColor);
             applyAppearance(next.appearance);
-            // фон перечитывается (IndexedDB, видео) только если он действительно изменился
+            applyLayoutPreferences(next);
             if (JSON.stringify(next.bg || {}) !== bgAppliedSig) await applyBackground(next);
-            paintTitle(next);
-            if (sub) sub.textContent = next.subtitle || '';
+            paintTitleAndSubtitle(next);
             paintAvatar(next.avatar || '', next.title);
             if (ENGINES[next.engine] && next.engine !== engine) { engine = next.engine; paintEngine(); }
             const sel = $('#theme-select'); if (sel) sel.value = next.theme || 'rose';
-            if (JSON.stringify(next.cities || []) !== clockCitiesSig) initClocks(next);
+            syncThemeSwatches(next.theme || 'rose');
+            const nextClockSig = JSON.stringify({
+                cities: next.cities || [],
+                seconds: next.clockSeconds !== false,
+                date: !!next.clockDate,
+                wxUnit: next.wxUnit === 'F' ? 'F' : 'C',
+                wxDetails: !!next.wxDetails
+            });
+            if (nextClockSig !== clockConfigSig) initClocks(next);
             const setOv = document.getElementById('settings-overlay');
             if (setOv && !setOv.hidden) syncSettingsUI(next);
         }, 120);
@@ -2357,6 +2766,4 @@ async function boot() {
 
 boot();
 
-/* Снимаем класс вступительной анимации: освобождает GPU-слои и не даёт анимации
-   перезапускаться при перерисовке карточек (drag, правка категорий). */
 setTimeout(() => document.documentElement.classList.remove('intro'), 800);
