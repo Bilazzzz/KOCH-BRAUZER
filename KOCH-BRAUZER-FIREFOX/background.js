@@ -53,6 +53,12 @@ function onTabUpdated(tabId, changeInfo, tab) {
   const candidate = startupCandidates.get(tabId);
   if (!candidate) return;
 
+  const pending = tab?.pendingUrl || '';
+  if (isExternalOrRealNavigation(pending)) {
+    dropStartupCandidate(tabId);
+    return;
+  }
+
   // Начало загрузки на about:blank = идёт реальная навигация (внешняя ссылка ещё не зафиксировала URL).
   if (
     changeInfo.status === 'loading' &&
@@ -78,31 +84,34 @@ async function replaceStartupCandidate(tabId) {
 
   try {
     const tab = await api.tabs.get(tabId);
-    const url = tab?.url || '';
+    const pending = tab?.pendingUrl || '';
+    const current = tab?.url || '';
+    const url = pending || current;
 
-    // Заменяем только вкладку, которая всё ещё стоит на стартовой странице браузера.
+    // Не трогаем вкладку, если уже начался переход на внешний адрес или она ушла со стартовой страницы.
+    if (isExternalOrRealNavigation(pending) || isExternalOrRealNavigation(current)) return;
     if (!STARTUP_PAGE_URLS.has(url)) return;
 
-    // about:blank во время запуска часто означает, что внешняя ссылка (например, из клиента Epic Games)
-    // ещё загружается: tab.url остаётся about:blank, пока навигация не зафиксирована.
-    // Такую вкладку нельзя подменять страницей расширения.
+    // about:blank во время запуска часто означает, что внешняя ссылка ещё загружается.
     if (url === 'about:blank' && isNavigationInFlight(tab)) return;
 
     await api.tabs.update(tabId, { url: KOCH_NEW_TAB_URL });
-  } catch (err) {
-    console.error('[KOCH] Failed to replace startup tab:', err);
+  } catch {
+    // Вкладка могла быть закрыта пользователем до срабатывания таймера
   } finally {
     if (!startupCandidates.size) stopListening();
   }
 }
 
 function registerStartupCandidate(tab) {
-  if (!tab || typeof tab.id !== 'number' || tab.pinned || !STARTUP_PAGE_URLS.has(tab.url || '')) return;
+  const pending = tab?.pendingUrl || '';
+  if (isExternalOrRealNavigation(pending)) return;
+  const url = pending || tab?.url || '';
+  if (!tab || typeof tab.id !== 'number' || tab.pinned || !STARTUP_PAGE_URLS.has(url)) return;
 
   const prev = startupCandidates.get(tab.id);
   if (prev) clearTimeout(prev.timer);
 
-  const url = tab.url;
   startupCandidates.set(tab.id, {
     initialUrl: url,
     timer: setTimeout(() => replaceStartupCandidate(tab.id), url === 'about:blank' ? STARTUP_BLANK_DELAY : 0)

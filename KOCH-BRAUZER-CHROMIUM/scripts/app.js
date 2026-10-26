@@ -8,6 +8,7 @@ const memFallback = new Map();
 const safeLS = {
     get(k) { try { return localStorage.getItem(k); } catch { return memFallback.has(k) ? memFallback.get(k) : null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch { memFallback.set(k, v); } },
+    del(k) { try { localStorage.removeItem(k); } catch {} memFallback.delete(k); },
     clearKb() {
         try { Object.keys(localStorage).forEach(k => { if (k.startsWith('kb_')) localStorage.removeItem(k); }); }
         catch { for (const k of [...memFallback.keys()]) if (k.startsWith('kb_')) memFallback.delete(k); }
@@ -42,16 +43,24 @@ const apiStorage = {
         }
         return api.storage.local.clear();
     },
+    _listeners: [],
+    _bound: false,
     onChanged(cb) {
+        this._listeners.push(cb);
+        if (this._bound) return;
+        this._bound = true;
+        const dispatch = (changes, area) => {
+            for (const fn of this._listeners) fn(changes, area);
+        };
         if (!isExt) {
             window.addEventListener('storage', e => {
                 if (!e.key || !e.key.startsWith('kb_')) return;
                 let nv; try { nv = JSON.parse(e.newValue); } catch { nv = e.newValue; }
-                cb({ [e.key.slice(3)]: { newValue: nv } }, 'local');
+                dispatch({ [e.key.slice(3)]: { newValue: nv } }, 'local');
             });
             return;
         }
-        api.storage.onChanged.addListener(cb);
+        api.storage.onChanged.addListener(dispatch);
     }
 };
 
@@ -93,26 +102,65 @@ function el(tag, attrs = {}, ...kids) {
 }
 
 const debounce = (fn, ms = 250) => {
-    let t;
-    const d = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
-    d.cancel = () => clearTimeout(t);
+    let t = 0, lastArgs = null;
+    const d = (...a) => { lastArgs = a; clearTimeout(t); t = setTimeout(() => { t = 0; const args = lastArgs; lastArgs = null; fn(...args); }, ms); };
+    d.cancel = () => { clearTimeout(t); t = 0; lastArgs = null; };
+    d.flush = () => { if (t) { const args = lastArgs; d.cancel(); fn(...args); } };
     return d;
 };
+const pendingSaves = new Set();
+const saveDebounced = (fn, ms = 200) => { const d = debounce(fn, ms); pendingSaves.add(d); return d; };
+const flushPendingSaves = () => pendingSaves.forEach(d => d.flush());
+const cancelPendingSaves = () => pendingSaves.forEach(d => d.cancel());
 
 function toast(msg, type = 'info') {
     const box = document.getElementById('toasts');
     if (!box) return;
+    const cls = type === 'error' ? 'toast toast-error' : 'toast';
+    const last = box.lastElementChild;
+    if (last && last.textContent === msg && last.className === cls && !last.classList.contains('out')) {
+        clearTimeout(last._t);
+        const dur = animDur(160);
+        if (dur) last.animate?.([{ transform: 'scale(1.045)' }, { transform: 'none' }], { duration: dur, easing: EASE });
+        last._t = setTimeout(() => { last.classList.add('out'); setTimeout(() => last.remove(), 320); }, 2600);
+        return;
+    }
     while (box.children.length >= 4) box.firstElementChild.remove();
-    const t = el('div', { class: type === 'error' ? 'toast toast-error' : 'toast' }, msg);
+    const t = el('div', { class: cls }, msg);
     box.append(t);
-    setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, 2600);
+    t._t = setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, 2600);
 }
 
+const favCache = new Map();
+const isIconUrl = s => typeof s === 'string' && /^(https?:|data:)/i.test(s);
 function faviconOf(url) {
+    if (!url) return '';
+    if (favCache.has(url)) return favCache.get(url);
     try {
         const u = new URL(/^https?:\/\//i.test(url) ? url : 'https://' + url);
-        return `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=64`;
+        if (!u.hostname || (!u.hostname.includes('.') && u.hostname !== 'localhost')) return '';
+        const res = `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=64`;
+        if (favCache.size >= 200) favCache.delete(favCache.keys().next().value);
+        favCache.set(url, res);
+        return res;
     } catch { return ''; }
+}
+function faviconFallbackOf(url) {
+    if (!url) return '';
+    try {
+        const u = new URL(/^https?:\/\//i.test(url) ? url : 'https://' + url);
+        if (!u.hostname || (!u.hostname.includes('.') && u.hostname !== 'localhost')) return '';
+        return `https://icons.duckduckgo.com/ip3/${u.hostname}.ico`;
+    } catch { return ''; }
+}
+function onFavError(e, rawUrl, makeFallbackNode) {
+    const img = e.target;
+    if (!img.dataset.fbTried) {
+        img.dataset.fbTried = '1';
+        const alt = faviconFallbackOf(rawUrl);
+        if (alt && img.src !== alt) { img.src = alt; return; }
+    }
+    img.replaceWith(makeFallbackNode());
 }
 
 function normalizeUrl(str) {
@@ -185,56 +233,67 @@ const DEFAULT_SETTINGS = {
     subtitle: 'твоя стартовая страница',
     smartGreeting: false,
     cities: ['Воткинск', 'Уральск'],
+    clockFormat: '24h',
     clockSeconds: true,
     clockDate: false,
+    hideClocks: false,
     wxUnit: 'C',
     wxDetails: false,
     avatar: '',
     engine: 'google',
     openInNewTab: false,
+    autoFocusSearch: false,
     searchShortcuts: true,
+    saveSearchHistory: true,
     numHotkeys: false,
+    hideChipNames: false,
+    hideAvatar: false,
+    hideHeroText: false,
     chipStyle: 'cards',
+    catColumns: 'auto',
     hideAddCat: false,
-    bg: { type: 'none', url: '', idb: '', opacity: 100 },
+    bg: { type: 'none', url: '', idb: '', opacity: 100, dim: 56, blur: 0, scale: 100, brightness: 100, contrast: 100, saturate: 100 },
     appearance: {
         panelOpacity: 30, cardOpacity: 45,
         panelBlur: 8, historyBlur: 14, historyOpacity: 78, settingsOpacity: 76, settingsBlur: 14,
-        radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10 },
+        panelWidth: 1180, panelPad: 28, panelMargin: 88, cardPad: 15, gridGap: 15, chipGap: 10,
+        chipMin: 84, searchWidth: 100, searchHeight: 54,
+        avatarSize: 96, iconSize: 40, titleSize: 47, subSize: 13, clockSize: 29, chipFont: 12,
+        radius: { card: 18, panel: 26, button: 10, chip: 12, input: 10, search: 50, avatar: 50 },
         font: { family: "'Product Sans','Product Sans Regular',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", size: 16, weight: 400, lineHeight: 1, letterSpacing: 0, titleSpacing: 0.14, subtitleSpacing: 0.12 },
-        animations: true, transitionSpeed: 0.28
+        animations: true, cursorGlow: true, transitionSpeed: 0.28
     }
 };
 
 const DEFAULT_CATEGORIES = [
-    { id: 'c1', icon: '🌐', image: '', name: 'Соцсети', collapsed: false, shortcuts: [
+    { id: 'c1', icon: '🌐', image: '', name: 'Соцсети', shortcuts: [
         { id: 's1', title: 'YouTube', url: 'https://youtube.com', icon: '' },
         { id: 's2', title: 'Telegram', url: 'https://web.telegram.org', icon: '' },
         { id: 's3', title: 'VK', url: 'https://vk.com', icon: '' },
         { id: 's4', title: 'Discord', url: 'https://discord.com', icon: '' }
     ]},
-    { id: 'c2', icon: '🎵', image: '', name: 'Музыка', collapsed: false, shortcuts: [
+    { id: 'c2', icon: '🎵', image: '', name: 'Музыка', shortcuts: [
         { id: 's5', title: 'Spotify', url: 'https://open.spotify.com', icon: '' },
         { id: 's6', title: 'SoundCloud', url: 'https://soundcloud.com', icon: '' },
         { id: 's7', title: 'Я Музыка', url: 'https://music.yandex.ru', icon: '' }
     ]},
-    { id: 'c3', icon: '🎮', image: '', name: 'Игры', collapsed: false, shortcuts: [
+    { id: 'c3', icon: '🎮', image: '', name: 'Игры', shortcuts: [
         { id: 's8', title: 'Steam', url: 'https://steampowered.com', icon: '' },
         { id: 's9', title: 'Twitch', url: 'https://twitch.tv', icon: '' },
         { id: 's10', title: 'Epic Games', url: 'https://store.epicgames.com', icon: '' }
     ]},
-    { id: 'c4', icon: '💻', image: '', name: 'Разработка', collapsed: false, shortcuts: [
+    { id: 'c4', icon: '💻', image: '', name: 'Разработка', shortcuts: [
         { id: 's11', title: 'GitHub', url: 'https://github.com', icon: '' },
         { id: 's12', title: 'StackOverflow', url: 'https://stackoverflow.com', icon: '' },
         { id: 's13', title: 'Reddit', url: 'https://reddit.com', icon: '' }
     ]}
 ];
 
-const CURRENT_SCHEMA = 9;
+const CURRENT_SCHEMA = 10;
 const PROFILE_FORMAT_VERSION = 3;
 const MEDIA_KEY = 'bg-media';
 let settingsCache = null;
-const EASE = 'cubic-bezier(.22,.7,.3,1)';
+const EASE = 'cubic-bezier(.16,1,.3,1)';
 function animDur(ms) { return document.documentElement.classList.contains('reduce-motion') ? 0 : ms; }
 
 /* ---------- 5. Нормализация и миграция ---------- */
@@ -244,7 +303,13 @@ function normalizeBg(bg) {
         type: ['none', 'image', 'video'].includes(bg.type) ? bg.type : 'none',
         url: typeof bg.url === 'string' ? bg.url : '',
         idb: typeof bg.idb === 'string' ? bg.idb : '',
-        opacity: num(bg.opacity, 100, 0, 100)
+        opacity: num(bg.opacity, 100, 0, 100),
+        dim: num(bg.dim, 56, 0, 90),
+        blur: num(bg.blur, 0, 0, 24),
+        scale: num(bg.scale, 100, 100, 130),
+        brightness: num(bg.brightness, 100, 20, 160),
+        contrast: num(bg.contrast, 100, 50, 160),
+        saturate: num(bg.saturate, 100, 0, 200)
     };
 }
 
@@ -261,12 +326,29 @@ function normalizeAppearance(app) {
         historyOpacity: num(app.historyOpacity, d.historyOpacity, 0, 100),
         settingsOpacity: num(app.settingsOpacity, d.settingsOpacity, 0, 100),
         settingsBlur: num(app.settingsBlur, d.settingsBlur, 0, 30),
+        panelWidth: num(app.panelWidth, d.panelWidth, 860, 1600),
+        panelPad: num(app.panelPad, d.panelPad, 16, 48),
+        panelMargin: num(app.panelMargin, d.panelMargin, 48, 180),
+        cardPad: num(app.cardPad, d.cardPad, 10, 28),
+        gridGap: num(app.gridGap, d.gridGap, 8, 28),
+        chipGap: num(app.chipGap, d.chipGap, 4, 20),
+        chipMin: num(app.chipMin, d.chipMin, 64, 130),
+        searchWidth: num(app.searchWidth, d.searchWidth, 50, 100),
+        searchHeight: num(app.searchHeight, d.searchHeight, 44, 68),
+        avatarSize: num(app.avatarSize, d.avatarSize, 56, 148),
+        iconSize: num(app.iconSize, d.iconSize, 24, 56),
+        titleSize: num(app.titleSize, d.titleSize, 24, 64),
+        subSize: num(app.subSize, d.subSize, 10, 22),
+        clockSize: num(app.clockSize, d.clockSize, 20, 46),
+        chipFont: num(app.chipFont, d.chipFont, 10, 16),
         radius: {
             card: num(r.card, d.radius.card, 0, 50),
             panel: num(r.panel, d.radius.panel, 0, 50),
             button: num(r.button, d.radius.button, 0, 50),
             chip: num(r.chip, d.radius.chip, 0, 50),
-            input: num(r.input, d.radius.input, 0, 50)
+            input: num(r.input, d.radius.input, 0, 50),
+            search: num(r.search, d.radius.search, 8, 50),
+            avatar: num(r.avatar, d.radius.avatar, 0, 50)
         },
         font: {
             family: typeof f.family === 'string' && f.family ? f.family : d.font.family,
@@ -278,6 +360,7 @@ function normalizeAppearance(app) {
             subtitleSpacing: num(f.subtitleSpacing, d.font.subtitleSpacing, 0, 0.6)
         },
         animations: typeof app.animations === 'boolean' ? app.animations : true,
+        cursorGlow: typeof app.cursorGlow === 'boolean' ? app.cursorGlow : true,
         transitionSpeed: num(app.transitionSpeed, d.transitionSpeed, 0, 2)
     };
 }
@@ -292,16 +375,24 @@ function normalizeSettings(s) {
         subtitle: typeof s.subtitle === 'string' ? s.subtitle.slice(0, 60) : d.subtitle,
         smartGreeting: typeof s.smartGreeting === 'boolean' ? s.smartGreeting : d.smartGreeting,
         cities: Array.isArray(s.cities) ? [typeof s.cities[0] === 'string' ? s.cities[0] : '', typeof s.cities[1] === 'string' ? s.cities[1] : ''] : d.cities.slice(),
+        clockFormat: s.clockFormat === '12h' ? '12h' : '24h',
         clockSeconds: typeof s.clockSeconds === 'boolean' ? s.clockSeconds : d.clockSeconds,
         clockDate: typeof s.clockDate === 'boolean' ? s.clockDate : d.clockDate,
+        hideClocks: typeof s.hideClocks === 'boolean' ? s.hideClocks : d.hideClocks,
         wxUnit: s.wxUnit === 'F' ? 'F' : 'C',
         wxDetails: typeof s.wxDetails === 'boolean' ? s.wxDetails : d.wxDetails,
         avatar: typeof s.avatar === 'string' ? s.avatar : d.avatar,
         engine: typeof s.engine === 'string' && ENGINES[s.engine] ? s.engine : d.engine,
         openInNewTab: typeof s.openInNewTab === 'boolean' ? s.openInNewTab : d.openInNewTab,
+        autoFocusSearch: typeof s.autoFocusSearch === 'boolean' ? s.autoFocusSearch : d.autoFocusSearch,
         searchShortcuts: typeof s.searchShortcuts === 'boolean' ? s.searchShortcuts : d.searchShortcuts,
+        saveSearchHistory: typeof s.saveSearchHistory === 'boolean' ? s.saveSearchHistory : d.saveSearchHistory,
         numHotkeys: typeof s.numHotkeys === 'boolean' ? s.numHotkeys : d.numHotkeys,
+        hideChipNames: typeof s.hideChipNames === 'boolean' ? s.hideChipNames : d.hideChipNames,
+        hideAvatar: typeof s.hideAvatar === 'boolean' ? s.hideAvatar : d.hideAvatar,
+        hideHeroText: typeof s.hideHeroText === 'boolean' ? s.hideHeroText : d.hideHeroText,
         chipStyle: s.chipStyle === 'compact' ? 'compact' : 'cards',
+        catColumns: ['auto', '2', '3', '4'].includes(String(s.catColumns)) ? String(s.catColumns) : 'auto',
         hideAddCat: typeof s.hideAddCat === 'boolean' ? s.hideAddCat : d.hideAddCat,
         bg: normalizeBg(s.bg),
         appearance: normalizeAppearance(s.appearance)
@@ -331,22 +422,22 @@ function normalizeCategories(cats) {
     if (cats && !Array.isArray(cats) && typeof cats === 'object') cats = Object.values(cats);
     if (!Array.isArray(cats)) return [];
     const str = (...v) => { for (const x of v) if (typeof x === 'string' && x) return x; return ''; };
+    const idStr = v => (typeof v === 'string' && v) ? v : (typeof v === 'number' ? String(v) : '');
     const usedC = new Set(), usedS = new Set();
     const uniq = (id, set) => { if (!id || set.has(id)) id = uid(); set.add(id); return id; };
     return cats.map(c => {
         if (!c || typeof c !== 'object') return null;
         const list = [c.shortcuts, c.links, c.items, c.tiles, c.sites, c.bookmarks].find(Array.isArray) || [];
         return {
-            id: uniq(str(c.id), usedC),
+            id: uniq(idStr(c.id), usedC),
             icon: str(c.icon, c.emoji),
             image: str(c.image, c.img),
             name: str(c.name, c.title) || 'Category',
-            collapsed: false,
             shortcuts: list.map(x => {
                 if (typeof x === 'string') x = { url: x, title: x };
                 if (!x || typeof x !== 'object') return null;
                 return {
-                    id: uniq(str(x.id), usedS),
+                    id: uniq(idStr(x.id), usedS),
                     title: str(x.title, x.name, x.label),
                     url: str(x.url, x.href, x.link),
                     icon: str(x.icon, x.image, x.favicon)
@@ -361,7 +452,7 @@ const HISTORY_LIMIT = 50;
 function normalizeHistory(h) {
     if (!Array.isArray(h)) return [];
     return h.map(x => ({
-        id: typeof x?.id === 'string' && x.id ? x.id : uid(),
+        id: (typeof x?.id === 'string' && x.id) ? x.id : (typeof x?.id === 'number' ? String(x.id) : uid()),
         q: typeof x?.q === 'string' ? x.q : ''
     })).filter(x => x.q).slice(0, HISTORY_LIMIT);
 }
@@ -369,8 +460,8 @@ function normalizeHistory(h) {
 /* Ключи настроек, по которым узнаётся очень старый бэкап, где настройки лежали прямо в корне файла. */
 const SETTINGS_KEYS = [
     'theme', 'customColor', 'title', 'subtitle', 'smartGreeting', 'cities',
-    'clockSeconds', 'clockDate', 'wxUnit', 'wxDetails', 'avatar', 'engine',
-    'openInNewTab', 'searchShortcuts', 'numHotkeys', 'chipStyle', 'hideAddCat',
+    'clockFormat', 'clockSeconds', 'clockDate', 'hideClocks', 'wxUnit', 'wxDetails', 'avatar', 'engine',
+    'openInNewTab', 'autoFocusSearch', 'searchShortcuts', 'saveSearchHistory', 'numHotkeys', 'hideChipNames', 'hideAvatar', 'hideHeroText', 'chipStyle', 'catColumns', 'hideAddCat',
     'bg', 'appearance'
 ];
 
@@ -408,47 +499,26 @@ function openMediaDB() {
     return idbPromise;
 }
 
-async function mediaPut(key, blob) {
+async function mediaTx(mode, run) {
+    if (mode === 'readwrite') bgMediaSig = '';
     const db = await openMediaDB();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction('media', 'readwrite');
-        tx.objectStore('media').put(blob, key);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-        tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+        const tx = db.transaction('media', mode);
+        const req = run(tx.objectStore('media'));
+        if (mode === 'readonly') {
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        } else {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+        }
     });
 }
-
-async function mediaGet(key) {
-    const db = await openMediaDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction('media', 'readonly');
-        const rq = tx.objectStore('media').get(key);
-        rq.onsuccess = () => resolve(rq.result || null);
-        rq.onerror = () => reject(rq.error);
-    });
-}
-
-async function mediaDel(key) {
-    const db = await openMediaDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction('media', 'readwrite');
-        tx.objectStore('media').delete(key);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-        tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
-    });
-}
-
-async function mediaKeys() {
-    const db = await openMediaDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction('media', 'readonly');
-        const rq = tx.objectStore('media').getAllKeys();
-        rq.onsuccess = () => resolve(rq.result || []);
-        rq.onerror = () => reject(rq.error);
-    });
-}
+const mediaPut = (key, blob) => mediaTx('readwrite', s => s.put(blob, key));
+const mediaGet = key => mediaTx('readonly', s => s.get(key)).then(r => r || null);
+const mediaDel = key => mediaTx('readwrite', s => s.delete(key));
+const mediaKeys = () => mediaTx('readonly', s => s.getAllKeys()).then(r => r || []);
 
 function blobToBase64(blob) {
     return new Promise((resolve, reject) => {
@@ -481,6 +551,7 @@ async function compressImageBlob(blob, maxWidth = 1920) {
             ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             canvas.toBlob(b => {
+                canvas.width = canvas.height = 0;
                 URL.revokeObjectURL(url);
                 resolve(b && b.size < blob.size ? b : blob);
             }, 'image/webp', 0.88);
@@ -488,18 +559,6 @@ async function compressImageBlob(blob, maxWidth = 1920) {
         img.onerror = () => { URL.revokeObjectURL(url); resolve(blob); };
         img.src = url;
     });
-}
-
-async function exportMedia() {
-    const list = [];
-    try {
-        for (const key of await mediaKeys()) {
-            const blob = await mediaGet(key);
-            if (!blob) continue;
-            list.push({ id: key, mime: blob.type || '', size: blob.size || 0, data: await blobToBase64(blob) });
-        }
-    } catch (err) { console.warn('[KOCH] exportMedia:', err); }
-    return list;
 }
 
 async function importMedia(list) {
@@ -514,6 +573,8 @@ async function importMedia(list) {
 /* ---------- Store ---------- */
 const store = {
     sig: '',
+    catsSig: '',
+    histSig: '',
     async _settingsFrom(data) {
         let s = data.settings;
         const ver = data.schemaVersion || 1;
@@ -533,14 +594,11 @@ const store = {
         const d = await apiStorage.get(['settings', 'schemaVersion', 'categories', 'history']);
         const settings = await this._settingsFrom(d);
         this.sig = JSON.stringify(settings);
-        const hadCollapsed = Array.isArray(d.categories) && d.categories.some(c => c && c.collapsed);
         const categories = Array.isArray(d.categories) ? normalizeCategories(d.categories) : clone(DEFAULT_CATEGORIES);
-        if (hadCollapsed) await apiStorage.set({ categories });
-        return {
-            settings,
-            categories,
-            history: Array.isArray(d.history) ? normalizeHistory(d.history) : []
-        };
+        this.catsSig = JSON.stringify(categories);
+        const history = Array.isArray(d.history) ? normalizeHistory(d.history) : [];
+        this.histSig = JSON.stringify(history);
+        return { settings, categories, history };
     },
     async setSettings(s, inv = true) {
         if (inv) settingsCache = s;
@@ -562,32 +620,48 @@ const store = {
         const d = await apiStorage.get('categories');
         return Array.isArray(d.categories) ? normalizeCategories(d.categories) : clone(DEFAULT_CATEGORIES);
     },
-    async setCategories(c) { await apiStorage.set({ categories: c }); },
+    async setCategories(c) {
+        this.catsSig = JSON.stringify(c);
+        await apiStorage.set({ categories: c });
+    },
     async getHistory() {
         const d = await apiStorage.get('history');
         return Array.isArray(d.history) ? normalizeHistory(d.history) : [];
     },
-    async setHistory(h) { await apiStorage.set({ history: h }); },
+    async setHistory(h) {
+        this.histSig = JSON.stringify(h);
+        await apiStorage.set({ history: h });
+    },
     onSettingsChange(cb) {
         apiStorage.onChanged((changes, area) => {
             if (area === 'local' && changes.settings) {
-                settingsCache = null;
-                cb(changes.settings.newValue ? normalizeSettings(changes.settings.newValue) : null);
+                const next = changes.settings.newValue ? normalizeSettings(changes.settings.newValue) : null;
+                const sig = next ? JSON.stringify(next) : '';
+                if (sig && sig === this.sig) return;
+                settingsCache = next;
+                cb(next ? clone(next) : null);
             }
         });
     },
     onCategoriesChange(cb) {
         apiStorage.onChanged((changes, area) => {
             if (area === 'local' && changes.categories) {
-                cb(Array.isArray(changes.categories.newValue) ? normalizeCategories(changes.categories.newValue) : []);
+                const next = Array.isArray(changes.categories.newValue) ? normalizeCategories(changes.categories.newValue) : [];
+                const sig = JSON.stringify(next);
+                if (sig === this.catsSig) return;
+                this.catsSig = sig;
+                cb(next);
             }
         });
     },
     async reset() {
         settingsCache = null;
+        this.sig = '';
+        this.catsSig = '';
+        this.histSig = '';
         await apiStorage.clear();
         try { for (const k of await mediaKeys()) await mediaDel(k); } catch (err) { console.warn('[KOCH] reset media:', err); }
-        try { localStorage.removeItem('koch_wx'); } catch {}
+        wxStore.clear();
     },
 
     async exportAll(opts = {}) {
@@ -596,7 +670,15 @@ const store = {
         const data = await apiStorage.get(['settings', 'categories', 'history']);
         const settings = normalizeSettings(data.settings);
         const cats = data.categories || clone(DEFAULT_CATEGORIES);
-        const media = (includeMedia && settings.bg?.idb) ? (await exportMedia()).filter(m => m.id === settings.bg.idb) : (includeMedia ? await exportMedia() : []);
+        let media = [];
+        if (includeMedia && settings.bg?.type !== 'none' && settings.bg?.idb) {
+            try {
+                const blob = await mediaGet(settings.bg.idb);
+                if (blob) {
+                    media.push({ id: settings.bg.idb, mime: blob.type || '', size: blob.size || 0, data: await blobToBase64(blob) });
+                }
+            } catch (err) { console.warn('[KOCH] exportMedia:', err); }
+        }
 
         const profile = {
             format: 'koch-brauzer-profile',
@@ -635,6 +717,8 @@ const store = {
         const next = { schemaVersion: CURRENT_SCHEMA };
         for (const k of ['settings', 'categories', 'history']) if (migrated[k]) next[k] = migrated[k];
         if (migrated.settings) this.sig = JSON.stringify(migrated.settings);
+        if (migrated.categories) this.catsSig = JSON.stringify(migrated.categories);
+        if (migrated.history) this.histSig = JSON.stringify(migrated.history);
         await apiStorage.set(next);
         settingsCache = migrated.settings ? clone(migrated.settings) : null;
         return migrated;
@@ -711,6 +795,7 @@ async function applyTheme(id, persist = true, preloadedCustomColor = null) {
     if (!THEMES[id]) id = 'rose';
     if (id === appliedTheme && id !== 'custom' && !persist) return;
     appliedTheme = id;
+    document.documentElement.dataset.theme = id;
     document.body.dataset.theme = id;
     syncThemeSwatches(id);
     const sel = $('#theme-select');
@@ -735,18 +820,36 @@ function applyAppearance(app) {
     const pb = app.panelBlur ?? d.panelBlur;
     r.style.setProperty('--panel-blur', pb + 'px');
     r.style.setProperty('--panel-bf', pb > 0 ? `blur(${pb}px)` : 'none');
+    r.classList.toggle('no-blur', pb <= 0);
     const hb = app.historyBlur ?? d.historyBlur;
     r.style.setProperty('--sg-bf', hb > 0 ? `blur(${hb}px)` : 'none');
     r.style.setProperty('--sg-op', (app.historyOpacity ?? d.historyOpacity) + '%');
     r.style.setProperty('--set-op', (app.settingsOpacity ?? d.settingsOpacity) + '%');
     const sb = app.settingsBlur ?? d.settingsBlur;
     r.style.setProperty('--set-bf', sb > 0 ? `blur(${sb}px)` : 'none');
+    r.style.setProperty('--panel-width', (app.panelWidth ?? d.panelWidth) + 'px');
+    r.style.setProperty('--panel-pad', (app.panelPad ?? d.panelPad) + 'px');
+    r.style.setProperty('--panel-mt', (app.panelMargin ?? d.panelMargin) + 'px');
+    r.style.setProperty('--card-pad', (app.cardPad ?? d.cardPad) + 'px');
+    r.style.setProperty('--grid-gap', (app.gridGap ?? d.gridGap) + 'px');
+    r.style.setProperty('--chip-gap', (app.chipGap ?? d.chipGap) + 'px');
+    r.style.setProperty('--chip-min', (app.chipMin ?? d.chipMin) + 'px');
+    r.style.setProperty('--search-width', (app.searchWidth ?? d.searchWidth) + '%');
+    r.style.setProperty('--search-height', (app.searchHeight ?? d.searchHeight) + 'px');
+    r.style.setProperty('--avatar-size', (app.avatarSize ?? d.avatarSize) + 'px');
+    r.style.setProperty('--chip-ico-size', (app.iconSize ?? d.iconSize) + 'px');
+    r.style.setProperty('--title-size', (app.titleSize ?? d.titleSize) + 'px');
+    r.style.setProperty('--sub-size', (app.subSize ?? d.subSize) + 'px');
+    r.style.setProperty('--clock-size', (app.clockSize ?? d.clockSize) + 'px');
+    r.style.setProperty('--chip-font', (app.chipFont ?? d.chipFont) + 'px');
     if (app.radius) {
         r.style.setProperty('--radius-card', (app.radius.card ?? d.radius.card) + 'px');
         r.style.setProperty('--radius-panel', (app.radius.panel ?? d.radius.panel) + 'px');
         r.style.setProperty('--radius-button', (app.radius.button ?? d.radius.button) + 'px');
         r.style.setProperty('--radius-chip', (app.radius.chip ?? d.radius.chip) + 'px');
         r.style.setProperty('--radius-input', (app.radius.input ?? d.radius.input) + 'px');
+        r.style.setProperty('--radius-search', (app.radius.search ?? d.radius.search) + 'px');
+        r.style.setProperty('--radius-avatar', (app.radius.avatar ?? d.radius.avatar) + '%');
     }
     if (app.font) {
         r.style.setProperty('--font-family', app.font.family || d.font.family);
@@ -759,6 +862,17 @@ function applyAppearance(app) {
     }
     r.style.setProperty('--transition-speed', (app.transitionSpeed ?? d.transitionSpeed) + 's');
     r.classList.toggle('reduce-motion', app.animations === false);
+    r.classList.toggle('no-cursor-glow', app.cursorGlow === false);
+}
+
+const computeBgScale = (scale = 100, blur = 0) => Math.max(scale / 100, blur > 0 ? 1 + blur * 0.003 : 1);
+function buildBgFilter(blur = 0, bright = 100, contrast = 100, sat = 100) {
+    const p = [];
+    if (blur > 0) p.push(`blur(${blur}px)`);
+    if (bright !== 100) p.push(`brightness(${bright}%)`);
+    if (contrast !== 100) p.push(`contrast(${contrast}%)`);
+    if (sat !== 100) p.push(`saturate(${sat}%)`);
+    return p.length ? p.join(' ') : 'none';
 }
 
 /* ---------- 7.1. Фон и управление видеодекодером ---------- */
@@ -825,10 +939,16 @@ async function applyBackgroundNow(preloaded) {
     let url = (bg.type !== 'none') ? (bg.url || '') : '';
     let sig = url ? 'url:' + url : '';
     if (bg.type !== 'none' && bg.idb) {
-        const blob = await mediaGet(bg.idb).catch(() => null);
-        if (blob) {
-            sig = `idb:${bg.idb}|${blob.size}|${blob.type}|${blob.lastModified || 0}|${blob.name || ''}`;
-            url = (sig === bgMediaSig && bgObjectUrl) ? bgObjectUrl : URL.createObjectURL(blob);
+        const idbSig = 'idb:' + bg.idb;
+        if (bgMediaSig === idbSig && bgObjectUrl) {
+            sig = idbSig;
+            url = bgObjectUrl;
+        } else {
+            const blob = await mediaGet(bg.idb).catch(() => null);
+            if (blob) {
+                sig = idbSig;
+                url = URL.createObjectURL(blob);
+            }
         }
     }
     bgMediaSig = sig;
@@ -836,7 +956,22 @@ async function applyBackgroundNow(preloaded) {
     bgObjectUrl = (url && url.startsWith('blob:')) ? url : null;
 
     const op = (bg.opacity ?? 100) / 100;
-    document.documentElement.style.setProperty('--bg-opacity', op);
+    const dimOp = (bg.dim ?? 56) / 100;
+    const bgBlur = bg.blur ?? 0;
+    const bgScale = bg.scale ?? 100;
+    const bgBright = bg.brightness ?? 100;
+    const bgContrast = bg.contrast ?? 100;
+    const bgSat = bg.saturate ?? 100;
+    const st = root.style;
+    st.setProperty('--bg-opacity', op);
+    st.setProperty('--bg-dim-op', dimOp);
+    st.setProperty('--bg-blur', bgBlur + 'px');
+    st.setProperty('--bg-bright', bgBright + '%');
+    st.setProperty('--bg-contrast', bgContrast + '%');
+    st.setProperty('--bg-sat', bgSat + '%');
+    st.setProperty('--bg-bf', buildBgFilter(bgBlur, bgBright, bgContrast, bgSat));
+    st.setProperty('--bg-scale', computeBgScale(bgScale, bgBlur));
+    root.classList.toggle('bg-scaled', bgScale > 100 || bgBlur > 0);
 
     const hasMedia = (bg.type === 'video' || bg.type === 'image') && url;
     root.classList.toggle('no-bg', !hasMedia);
@@ -871,24 +1006,18 @@ async function applyBackgroundNow(preloaded) {
 }
 
 let videoVisibilityBound = false;
-let blurSyncTimer = 0;
 
 function setupVideoVisibility() {
     if (videoVisibilityBound) return;
     videoVisibilityBound = true;
 
     const sync = () => {
-        clearTimeout(blurSyncTimer);
+        if (!isPageActive()) flushPendingSaves();
         syncVideoPlayback();
         syncClockTimers();
     };
 
     document.addEventListener('visibilitychange', sync);
-    window.addEventListener('blur', () => {
-        clearTimeout(blurSyncTimer);
-        blurSyncTimer = setTimeout(sync, 150);
-    });
-    window.addEventListener('focus', sync);
     window.addEventListener('pagehide', () => { pageGone = true; sync(); });
     window.addEventListener('pageshow', () => { pageGone = false; sync(); });
     document.addEventListener('freeze', () => { pageGone = true; sync(); });
@@ -906,30 +1035,43 @@ function getSmartGreeting() {
 }
 
 function paintTitleAndSubtitle(s) {
+    const raw = (s.title || 'KOCH BRAUZER').trim() || 'KOCH BRAUZER';
     const t = document.getElementById('main-title');
-    if (t) {
-        const raw = (s.title || 'KOCH BRAUZER').trim() || 'KOCH BRAUZER';
-        t.textContent = raw;
-        document.title = raw;
-        const fb = document.getElementById('avatar-fallback');
-        if (fb && !fb.hidden) fb.textContent = (raw[0] || 'K').toUpperCase();
+    if (t && t.textContent !== raw) t.textContent = raw;
+    if (document.title !== raw) document.title = raw;
+    const fb = document.getElementById('avatar-fallback');
+    if (fb && !fb.hidden) {
+        const ch = (raw[0] || 'K').toUpperCase();
+        if (fb.textContent !== ch) fb.textContent = ch;
     }
     const sub = document.getElementById('subtitle');
     if (sub) {
         const baseSub = (s.subtitle ?? '').trim();
-        if (s.smartGreeting) {
-            const greet = getSmartGreeting();
-            sub.textContent = baseSub ? `${greet} • ${baseSub}` : greet;
-        } else {
-            sub.textContent = baseSub;
-        }
+        const nextSub = s.smartGreeting ? (baseSub ? `${getSmartGreeting()} • ${baseSub}` : getSmartGreeting()) : baseSub;
+        if (sub.textContent !== nextSub) sub.textContent = nextSub;
     }
 }
 
 function applyLayoutPreferences(s) {
     const addCatBtn = document.getElementById('add-cat');
     if (addCatBtn) addCatBtn.hidden = !!s.hideAddCat;
+    const clocksSec = document.querySelector('.clocks');
+    if (clocksSec) clocksSec.hidden = !!s.hideClocks;
+    const avatarEl = document.getElementById('avatar');
+    if (avatarEl) avatarEl.hidden = !!s.hideAvatar;
+    const titleEl = document.getElementById('main-title');
+    const subEl = document.getElementById('subtitle');
+    if (titleEl) titleEl.hidden = !!s.hideHeroText;
+    if (subEl) subEl.hidden = !!s.hideHeroText;
+    const heroEl = document.querySelector('.hero');
+    if (heroEl) heroEl.hidden = !!(s.hideAvatar && s.hideHeroText);
+    const catsWrap = document.getElementById('cats');
+    if (catsWrap) {
+        if (s.catColumns && s.catColumns !== 'auto') catsWrap.dataset.cols = s.catColumns;
+        else delete catsWrap.dataset.cols;
+    }
     document.body.classList.toggle('chips-compact', s.chipStyle === 'compact');
+    document.body.classList.toggle('chips-icon-only', !!s.hideChipNames);
 }
 
 async function repairBgMedia(s) {
@@ -955,7 +1097,7 @@ async function repairBgMedia(s) {
 const geoCache = new Map();
 let tickTimer = null, wxTimer = null, clockSlots = [];
 let clockGen = 0, clocksReady = false, lastWxAt = 0, clockConfigSig = '';
-let clockOpts = { seconds: true, date: false, wxUnit: 'C', wxDetails: false };
+let clockOpts = { hour12: false, seconds: true, date: false, hideClocks: false, wxUnit: 'C', wxDetails: false };
 const WX_INTERVAL = 30 * 60 * 1000;
 
 async function fetchJson(url, ms = 8000, tries = 2) {
@@ -978,7 +1120,18 @@ async function fetchJson(url, ms = 8000, tries = 2) {
 const WX_FRESH = 15 * 60 * 1000, WX_STALE = 6 * 60 * 60 * 1000;
 const wxStore = (() => {
     let d = null;
-    const load = () => d || (d = (() => { try { return JSON.parse(safeLS.get('koch_wx')) || { geo: {}, wx: {} }; } catch { return { geo: {}, wx: {} }; } })());
+    const load = () => {
+        if (d) return d;
+        try {
+            const p = JSON.parse(safeLS.get('koch_wx'));
+            d = (p && typeof p === 'object' && p.geo && typeof p.geo === 'object' && p.wx && typeof p.wx === 'object')
+                ? p
+                : { geo: {}, wx: {} };
+        } catch {
+            d = { geo: {}, wx: {} };
+        }
+        return d;
+    };
     const save = () => { try { safeLS.set('koch_wx', JSON.stringify(d)); } catch {} };
     return {
         geo: c => load().geo[c] || null,
@@ -994,6 +1147,10 @@ const wxStore = (() => {
             const keys = Object.keys(w);
             if (keys.length >= 40) delete w[keys[0]];
             w[k] = v; save();
+        },
+        clear() {
+            d = null;
+            safeLS.del('koch_wx');
         }
     };
 })();
@@ -1030,15 +1187,14 @@ function wxEmoji(code) {
     if (code === 3) return '☁️';
     if (code <= 48) return '🌫️';
     if (code <= 57) return '🌦️';
-    if (code <= 67) return '🌧️';
-    if (code <= 77) return '❄️';
-    if (code <= 82) return '🌧️';
+    if (code <= 67 || (code > 77 && code <= 82)) return '🌧️';
     if (code <= 86) return '❄️';
     return '⛈️';
 }
 
 function applyWxNode(elNode, w, statusHint = '') {
     if (!elNode) return;
+    const wasPlaceholder = elNode.textContent === '—';
     if (!w) {
         elNode.textContent = '—';
         if (statusHint) elNode.title = statusHint;
@@ -1057,16 +1213,21 @@ function applyWxNode(elNode, w, statusHint = '') {
     } else if (elNode.textContent !== mainTxt || elNode.children.length > 0) {
         elNode.textContent = mainTxt;
     }
+    if (wasPlaceholder && !document.documentElement.classList.contains('intro')) {
+        const dur = animDur(200);
+        if (dur) elNode.animate?.([{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
+    }
     const timeStr = w.at ? new Date(w.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
     const extraTip = [];
     if (w.feels != null) extraTip.push(`ощущается как ${formatTemp(w.feels)}`);
     if (w.wind != null) extraTip.push(`ветер ${w.wind} м/с`);
-    elNode.title = [wxDesc(w.code), ...extraTip, timeStr ? 'обновлено в ' + timeStr : ''].filter(Boolean).join(' • ');
+    elNode.title = [wxDesc(w.code), ...extraTip, timeStr ? 'обновлено в ' + timeStr : '', 'клик — обновить'].filter(Boolean).join(' • ');
 }
 
 const geoPending = new Map();
 async function geocode(city) {
-    const key = typeof city === 'string' ? city.trim().toLowerCase() : '';
+    const raw = typeof city === 'string' ? city.trim() : '';
+    const key = raw.toLowerCase();
     if (!key || key === '—') return { notFound: true };
     if (geoCache.has(key)) return geoCache.get(key);
     const saved = wxStore.geo(key) || wxStore.geo(city);
@@ -1074,8 +1235,20 @@ async function geocode(city) {
     if (geoPending.has(key)) return geoPending.get(key);
     const req = (async () => {
         try {
-            const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city.trim())}&count=1&language=ru&format=json`);
-            const g = d?.results?.[0];
+            const parts = raw.split(',').map(p => p.trim()).filter(Boolean);
+            const baseCity = parts[0] || raw;
+            const regionHint = parts.slice(1).join(' ').toLowerCase();
+            const count = regionHint ? 5 : 1;
+            const d = await fetchJson(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(baseCity)}&count=${count}&language=ru&format=json`);
+            const results = d?.results || [];
+            let g = results[0];
+            if (regionHint && results.length > 1) {
+                const matched = results.find(r => {
+                    const hay = [r.country, r.country_code, r.admin1, r.admin2].filter(Boolean).join(' ').toLowerCase();
+                    return hay.includes(regionHint);
+                });
+                if (matched) g = matched;
+            }
             if (!g) {
                 const nf = { notFound: true };
                 geoCache.set(key, nf);
@@ -1093,9 +1266,9 @@ async function geocode(city) {
     return req;
 }
 
-async function weather(lat, lon) {
+async function weather(lat, lon, force = false) {
     const key = lat + ',' + lon, c = wxStore.wx(key);
-    if (c && Date.now() - c.at < WX_FRESH && c.feels !== undefined) return c;
+    if (!force && c && Date.now() - c.at < WX_FRESH && c.feels !== undefined) return c;
     const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&wind_speed_unit=ms&timezone=auto`);
     if (d?.current?.temperature_2m == null) throw new Error('Weather data unavailable');
     const w = {
@@ -1109,37 +1282,52 @@ async function weather(lat, lon) {
     return w;
 }
 
+const FMT_SEC = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
+const FMT_MIN = { hour: '2-digit', minute: '2-digit' };
+let lastGreetHour = -1;
+let lastCitiesSig = '';
+
 function tick() {
     const now = new Date();
+    const curMin = Math.floor(now.getTime() / 60000);
+    if (settingsCache?.smartGreeting) {
+        const h = now.getHours();
+        if (h !== lastGreetHour) {
+            lastGreetHour = h;
+            paintTitleAndSubtitle(settingsCache);
+        }
+    }
+    if (clockOpts.hideClocks) return;
+    const fmtBase = clockOpts.seconds ? FMT_SEC : FMT_MIN;
+    const fmtOpts = clockOpts.hour12 ? { ...fmtBase, hour: 'numeric', hour12: true } : { ...fmtBase, hour12: false };
+    const locale = clockOpts.hour12 ? 'en-US' : 'ru-RU';
     for (let i = 0; i < clockSlots.length; i++) {
         const s = clockSlots[i];
         if (s.hidden) continue;
         const elT = s.el || (s.el = $(i === 0 ? '#time-a' : '#time-b'));
         if (!elT) continue;
         let text;
-        const fmtOpts = clockOpts.seconds
-            ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
-            : { hour: '2-digit', minute: '2-digit' };
         try {
             if (!s.fmt) {
                 try {
-                    s.fmt = new Intl.DateTimeFormat('ru-RU', { ...fmtOpts, timeZone: s.tz || undefined });
+                    s.fmt = new Intl.DateTimeFormat(locale, { ...fmtOpts, timeZone: s.tz || undefined });
                 } catch {
                     s.tz = null;
-                    s.fmt = new Intl.DateTimeFormat('ru-RU', fmtOpts);
+                    s.fmt = new Intl.DateTimeFormat(locale, fmtOpts);
                 }
             }
             text = s.fmt.format(now);
         } catch {
             s.fmt = null;
-            text = now.toLocaleTimeString('ru-RU', fmtOpts);
+            text = now.toLocaleTimeString(locale, fmtOpts);
         }
         if (elT.textContent !== text) elT.textContent = text;
 
         const elD = s.dateEl || (s.dateEl = $(i === 0 ? '#date-a' : '#date-b'));
         if (elD) {
             elD.hidden = !clockOpts.date;
-            if (clockOpts.date) {
+            if (clockOpts.date && s.lastDateMin !== curMin) {
+                s.lastDateMin = curMin;
                 try {
                     if (!s.dateFmt) {
                         s.dateFmt = new Intl.DateTimeFormat('ru-RU', {
@@ -1156,17 +1344,22 @@ function tick() {
     }
 }
 
-async function refreshWeather() {
+async function refreshWeather(force = false) {
+    if (clockOpts.hideClocks) return false;
     const slots = clockSlots, gen = clockGen;
     const pending = new Map();
-    let failed = false;
+    let failed = false, tzChanged = false;
     await Promise.all(slots.map(async (s, i) => {
         if (s.hidden) return;
         const wxEl = s.wxEl || (s.wxEl = $(i === 0 ? '#wx-a' : '#wx-b'));
         if (!wxEl) return;
-        if (!s.geo && s.city && s.city !== '—') {
+        if ((!s.geo || (force && s.geo.notFound)) && s.city && s.city !== '—') {
+            if (force) geoCache.delete(s.city.toLowerCase());
             s.geo = await geocode(s.city);
-            if (s.geo && !s.geo.notFound) { s.tz = s.geo.tz || null; s.fmt = null; s.dateFmt = null; }
+            if (s.geo && !s.geo.notFound) {
+                const nextTz = s.geo.tz || null;
+                if (nextTz !== s.tz) { s.tz = nextTz; s.fmt = null; s.dateFmt = null; s.lastDateMin = -1; tzChanged = true; }
+            }
         }
         if (gen !== clockGen) return;
         const named = s.city && s.city !== '—';
@@ -1177,9 +1370,9 @@ async function refreshWeather() {
         }
         const key = s.geo.lat + ',' + s.geo.lon;
         const cached = wxStore.wx(key);
-        if (cached && Date.now() - cached.at < WX_STALE && gen === clockGen) applyWxNode(wxEl, cached);
+        if (!force && cached && Date.now() - cached.at < WX_STALE && gen === clockGen) applyWxNode(wxEl, cached);
         try {
-            if (!pending.has(key)) pending.set(key, weather(s.geo.lat, s.geo.lon));
+            if (!pending.has(key)) pending.set(key, weather(s.geo.lat, s.geo.lon, force));
             const w = await pending.get(key);
             if (gen === clockGen) applyWxNode(wxEl, w);
         } catch {
@@ -1188,17 +1381,19 @@ async function refreshWeather() {
             if (gen === clockGen) applyWxNode(wxEl, c && Date.now() - c.at < WX_STALE ? c : null, 'Ошибка сети');
         }
     }));
-    if (gen !== clockGen) return;
+    if (gen !== clockGen) return false;
+    if (tzChanged) tick();
     wxNeedRetry = failed;
     if (failed) scheduleWxRetry();
     else { wxRetryN = 0; lastWxAt = Date.now(); }
+    return !failed;
 }
 window.addEventListener('online', () => { wxRetryN = 0; if (clocksReady && isPageActive()) refreshWeather(); });
 
 function scheduleNextTick() {
     if (tickTimer) clearTimeout(tickTimer);
-    if (!isPageActive() || !clockSlots.length) { tickTimer = null; return; }
-    const period = clockOpts.seconds ? 1000 : 60000;
+    if (!isPageActive() || !clockSlots.length || ( clockOpts.hideClocks && !settingsCache?.smartGreeting )) { tickTimer = null; return; }
+    const period = (!clockOpts.hideClocks && clockOpts.seconds) ? 1000 : 60000;
     const delay = (period + 15) - (Date.now() % period);
     tickTimer = setTimeout(() => {
         tick();
@@ -1217,7 +1412,7 @@ function startClockTimers() {
     if (!isPageActive() || !clockSlots.length) return;
     tick();
     scheduleNextTick();
-    if (clocksReady) {
+    if (clocksReady && !clockOpts.hideClocks) {
         wxTimer = setInterval(refreshWeather, WX_INTERVAL);
         if (wxNeedRetry || Date.now() - lastWxAt >= WX_INTERVAL) { wxRetryN = 0; refreshWeather(); }
     }
@@ -1228,20 +1423,65 @@ function syncClockTimers() {
     else if (!tickTimer) startClockTimers();
 }
 
+let wxClickBound = false;
+function bindWxRefreshClick() {
+    if (wxClickBound) return;
+    wxClickBound = true;
+    document.querySelector('.clocks')?.addEventListener('click', async e => {
+        const wxNode = e.target.closest('.clock-wx');
+        if (!wxNode) return;
+        const dur = animDur(200);
+        if (dur) wxNode.animate?.([{ transform: 'scale(.95)' }, { transform: 'none' }], { duration: dur, easing: EASE });
+        const ok = await refreshWeather(true);
+        toast(ok ? 'Погода обновлена' : 'Не удалось обновить погоду', ok ? 'info' : 'error');
+    });
+}
+
 async function initClocks(preloaded) {
-    stopClockTimers();
-    const gen = ++clockGen;
-    clocksReady = false;
+    bindWxRefreshClick();
     const s = preloaded || await store.getSettings();
-    if (gen !== clockGen) return;
     const cities = s.cities || ['—', '—'];
-    clockOpts = {
+    const nextOpts = {
+        hour12: s.clockFormat === '12h',
         seconds: s.clockSeconds !== false,
         date: !!s.clockDate,
+        hideClocks: !!s.hideClocks,
         wxUnit: s.wxUnit === 'F' ? 'F' : 'C',
         wxDetails: !!s.wxDetails
     };
-    clockConfigSig = JSON.stringify({ cities: s.cities || [], ...clockOpts });
+    const nextCitiesSig = JSON.stringify(cities);
+    clockConfigSig = JSON.stringify({ cities: s.cities || [], ...nextOpts });
+
+    if (clockSlots.length && nextCitiesSig === lastCitiesSig) {
+        const wasHidden = clockOpts.hideClocks;
+        clockOpts = nextOpts;
+        for (const sl of clockSlots) {
+            sl.fmt = null;
+            sl.dateFmt = null;
+            sl.lastDateMin = -1;
+            if (!sl.hidden && sl.wxEl && sl.geo && !sl.geo.notFound) {
+                const cw = wxStore.wx(sl.geo.lat + ',' + sl.geo.lon);
+                applyWxNode(sl.wxEl, cw && Date.now() - cw.at < WX_STALE ? cw : null);
+            }
+        }
+        if (nextOpts.hideClocks) {
+            stopClockTimers();
+            if (isPageActive() && s.smartGreeting) scheduleNextTick();
+        } else if (wasHidden && isPageActive()) {
+            startClockTimers();
+            refreshWeather();
+        } else {
+            tick();
+            if (isPageActive()) scheduleNextTick();
+        }
+        return;
+    }
+
+    stopClockTimers();
+    const gen = ++clockGen;
+    clocksReady = false;
+    clockOpts = nextOpts;
+    lastCitiesSig = nextCitiesSig;
 
     const cityBEmpty = !(cities[1] || '').trim();
     const cardB = $('#clock-card-b');
@@ -1251,10 +1491,15 @@ async function initClocks(preloaded) {
         const rawCity = (cities[i] || '').trim();
         const hidden = i === 1 && cityBEmpty;
         const city = rawCity || '—';
+        const displayCity = rawCity.includes(',') ? (rawCity.split(',')[0].trim() || city) : city;
         const nameEl = $(i === 0 ? '#city-a' : '#city-b');
         const wxEl = $(i === 0 ? '#wx-a' : '#wx-b');
         const dateEl = $(i === 0 ? '#date-a' : '#date-b');
-        if (nameEl) nameEl.textContent = String(city).toUpperCase();
+        if (nameEl) {
+            nameEl.textContent = String(displayCity).toUpperCase();
+            if (rawCity.includes(',')) nameEl.title = rawCity;
+            else nameEl.removeAttribute('title');
+        }
         const key = rawCity.toLowerCase();
         const savedGeo = key ? (geoCache.get(key) || wxStore.geo(key) || wxStore.geo(rawCity)) : null;
         if (wxEl && !hidden) {
@@ -1268,6 +1513,7 @@ async function initClocks(preloaded) {
             geo: savedGeo || null,
             fmt: null,
             dateFmt: null,
+            lastDateMin: -1,
             el: $(i === 0 ? '#time-a' : '#time-b'),
             dateEl,
             wxEl
@@ -1275,23 +1521,12 @@ async function initClocks(preloaded) {
     });
     tick();
     if (isPageActive()) scheduleNextTick();
-    (async () => {
-        await Promise.all(clockSlots.map(async sl => {
-            if (sl.hidden) return;
-            sl.geo = await geocode(sl.city);
-            sl.tz = sl.geo?.tz || null;
-            sl.fmt = null;
-            sl.dateFmt = null;
-        }));
-        if (gen !== clockGen) return;
-        clocksReady = true;
-        lastWxAt = 0;
-        tick();
-        if (isPageActive()) {
-            refreshWeather();
-            wxTimer = setInterval(refreshWeather, WX_INTERVAL);
-        }
-    })();
+    clocksReady = true;
+    lastWxAt = 0;
+    if (isPageActive() && !nextOpts.hideClocks) {
+        refreshWeather();
+        wxTimer = setInterval(refreshWeather, WX_INTERVAL);
+    }
 }
 
 /* ---------- 9. Поиск ---------- */
@@ -1305,15 +1540,22 @@ const ENGINES = {
 
 const SEARCH_BANGS = {
     '!g': { name: 'Google', url: 'https://www.google.com/search?q=' },
+    '!y': { name: 'Яндекс', url: 'https://yandex.ru/search/?text=' },
+    '!ya': { name: 'Яндекс', url: 'https://yandex.ru/search/?text=', alias: true },
     '!ddg': { name: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=' },
     '!b': { name: 'Bing', url: 'https://www.bing.com/search?q=' },
-    '!y': { name: 'Яндекс', url: 'https://yandex.ru/search/?text=' },
-    '!ya': { name: 'Яндекс', url: 'https://yandex.ru/search/?text=' },
     '!br': { name: 'Brave Search', url: 'https://search.brave.com/search?q=' },
     '!yt': { name: 'YouTube', url: 'https://www.youtube.com/results?search_query=' },
     '!gh': { name: 'GitHub', url: 'https://github.com/search?q=' },
     '!w': { name: 'Wikipedia', url: 'https://ru.wikipedia.org/w/index.php?search=' },
-    '!tr': { name: 'Google Переводчик', url: 'https://translate.google.com/?sl=auto&tl=ru&text=' }
+    '!tr': { name: 'Google Переводчик', url: 'https://translate.google.com/?sl=auto&tl=ru&text=' },
+    '!maps': { name: 'Google Карты', url: 'https://www.google.com/maps/search/' },
+    '!ymaps': { name: 'Яндекс Карты', url: 'https://yandex.ru/maps/?text=' },
+    '!oz': { name: 'Ozon', url: 'https://www.ozon.ru/search/?text=' },
+    '!wb': { name: 'Wildberries', url: 'https://www.wildberries.ru/catalog/0/search.aspx?search=' },
+    '!st': { name: 'Steam', url: 'https://store.steampowered.com/search/?term=' },
+    '!tw': { name: 'Twitch', url: 'https://www.twitch.tv/search?term=' },
+    '!rd': { name: 'Reddit', url: 'https://www.reddit.com/search/?q=' }
 };
 
 let engine = 'google', qHistory = [];
@@ -1391,29 +1633,30 @@ function renderSuggest() {
     const rows = [];
 
     // Поиск по собственным ярлыкам
-    if (q && s.searchShortcuts !== false && Array.isArray(categories)) {
+    if (q && !raw.startsWith('!') && s.searchShortcuts !== false && Array.isArray(categories)) {
         const matchedSc = [];
         for (const cat of categories) {
             for (const sc of cat.shortcuts || []) {
                 const t = (sc.title || '').toLowerCase(), u = (sc.url || '').toLowerCase();
                 if (t.includes(q) || u.includes(q)) {
-                    matchedSc.push({ sc, catName: cat.name });
+                    matchedSc.push({ sc, catId: cat.id, catName: cat.name });
                     if (matchedSc.length >= 4) break;
                 }
             }
             if (matchedSc.length >= 4) break;
         }
-        matchedSc.forEach(({ sc, catName }, idx) => {
-            const fav = (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:'))) ? sc.icon : faviconOf(sc.url);
+        matchedSc.forEach(({ sc, catId, catName }, idx) => {
+            const fav = isIconUrl(sc.icon) ? sc.icon : faviconOf(sc.url);
             const icoWrap = fav
-                ? el('span', { class: 'ico' }, el('img', { src: fav, alt: '', onerror: e => e.target.replaceWith(document.createTextNode('🌐')) }))
+                ? el('span', { class: 'ico' }, el('img', { src: fav, alt: '', onerror: e => onFavError(e, sc.url, () => document.createTextNode('🌐')) }))
                 : svgEl(ICO_LINK, 'ico');
             rows.push(el('li', {
                 id: 'sg-opt-sc-' + idx,
                 class: 'sc-hit',
                 role: 'option',
                 'aria-selected': 'false',
-                dataset: { url: sc.url }
+                title: 'ЛКМ — открыть • ПКМ — изменить ярлык',
+                dataset: { url: sc.url, catId, scId: sc.id }
             },
             icoWrap,
             el('span', { class: 'q' }, markMatch(sc.title || sc.url, q)),
@@ -1422,26 +1665,48 @@ function renderSuggest() {
     }
 
     const bangInfo = raw ? parseBangQuery(raw) : null;
+    const isBangPrefix = raw.startsWith('!') && !raw.includes(' ');
+    let matchedBangs = [];
+    if (isBangPrefix) {
+        matchedBangs = Object.entries(SEARCH_BANGS)
+            .filter(([k, v]) => (!v.alias || q === k) && k.startsWith(q))
+            .slice(0, 7);
+        matchedBangs.forEach(([k, v], idx) => {
+            rows.push(el('li', {
+                id: 'sg-opt-bang-' + idx,
+                class: 'go',
+                role: 'option',
+                'aria-selected': 'false',
+                dataset: { bang: k }
+            },
+            svgEl(ICO_SEARCH, 'ico'),
+            el('span', { class: 'q' }, el('mark', {}, k), ` — искать в ${v.name}`),
+            el('span', { class: 'sg-tag' }, v.name)));
+        });
+    }
+
+    const directUrl = (raw && !bangInfo && !isBangPrefix) ? normalizeUrl(raw) : '';
+    const isDirectUrl = !!(directUrl && (/^https?:\/\//i.test(raw) || !raw.includes(' ')));
     const items = qHistory.filter(h => !q || h.q.toLowerCase().includes(q)).slice(0, 8);
-    if (raw && !items.some(h => h.q.toLowerCase() === q)) {
+    if (raw && (!isBangPrefix || matchedBangs.length === 0) && !items.some(h => h.q.toLowerCase() === q)) {
         const labelText = bangInfo
             ? (bangInfo.query ? `Искать «${bangInfo.query}» в ${bangInfo.name}` : `Введите запрос после ${bangInfo.bang} для поиска в ${bangInfo.name}`)
-            : `Искать «${raw}»`;
+            : (isDirectUrl ? `Перейти на ${raw}` : `Искать «${raw}»`);
         rows.push(el('li', {
             id: 'sg-opt-go',
             class: 'go',
             role: 'option',
             'aria-selected': 'false',
-            dataset: { hq: '' }
+            dataset: (bangInfo && !bangInfo.query) ? { bang: bangInfo.bang } : {}
         },
-        svgEl(ICO_SEARCH, 'ico'),
+        svgEl(isDirectUrl ? ICO_LINK : ICO_SEARCH, 'ico'),
         el('span', { class: 'q' }, labelText),
-        bangInfo ? el('span', { class: 'sg-tag' }, bangInfo.name) : null));
+        bangInfo ? el('span', { class: 'sg-tag' }, bangInfo.name) : (isDirectUrl ? el('span', { class: 'sg-tag' }, 'Сайт') : null)));
     }
 
     items.forEach((h, idx) => {
         const ago = agoLabel(h.id);
-        const fill = svgEl(ICO_FILL, '', 'Вставить в поле');
+        const fill = svgEl(ICO_FILL, 'fill', 'Вставить в поле');
         const del = svgEl(ICO_X, 'del', 'Удалить');
         rows.push(el('li', {
             id: 'sg-opt-' + idx,
@@ -1455,18 +1720,26 @@ function renderSuggest() {
         el('span', { class: 'act' }, fill, del)));
     });
 
+    const sgHead = $('.sg-head', box);
+    if (sgHead) sgHead.hidden = items.length === 0;
     const clrBtn = $('#clear-history');
     if (clrBtn) clrBtn.hidden = items.length === 0;
 
     ul.replaceChildren(...rows);
     const open = rows.length > 0;
-    box.hidden = !open;
-    inp.setAttribute('aria-expanded', String(open));
-    inp.removeAttribute('aria-activedescendant');
+    if (open) {
+        if (box._closeT) { clearTimeout(box._closeT); box._closeT = 0; }
+        box.classList.remove('closing');
+        box.hidden = false;
+        inp.setAttribute('aria-expanded', 'true');
+        inp.removeAttribute('aria-activedescendant');
+    } else {
+        hideSuggest();
+    }
 }
 
 function moveSuggest(dir) {
-    const box = suggestBox(); if (!box || box.hidden) return false;
+    const box = suggestBox(); if (!box || box.hidden || box.classList.contains('closing')) return false;
     const lis = [...suggestList().children]; if (!lis.length) return false;
     sugSel = (sugSel + dir + lis.length) % lis.length;
     lis.forEach((li, i) => {
@@ -1480,24 +1753,47 @@ function moveSuggest(dir) {
     return true;
 }
 
+const debouncedSuggest = debounce(renderSuggest, 90);
+
 function hideSuggest() {
+    debouncedSuggest.cancel();
     const b = suggestBox();
-    if (b && !b.hidden) {
-        b.hidden = true;
+    if (b && !b.hidden && !b.classList.contains('closing')) {
         sugSel = -1;
         const inp = searchInput();
         if (inp) {
             inp.setAttribute('aria-expanded', 'false');
             inp.removeAttribute('aria-activedescendant');
         }
+        const dur = animDur(130);
+        if (dur) {
+            b.classList.add('closing');
+            b._closeT = setTimeout(() => {
+                b.classList.remove('closing');
+                b.hidden = true;
+                b._closeT = 0;
+            }, dur);
+        } else {
+            b.hidden = true;
+        }
     }
 }
 
 function navigateTo(targetUrl, forceNewTab = false) {
     if (!targetUrl) return;
-    const openNew = forceNewTab || !!(settingsCache && settingsCache.openInNewTab);
-    if (openNew) window.open(targetUrl, '_blank', 'noopener');
-    else location.href = targetUrl;
+    const inIframe = (() => { try { return window.self !== window.top; } catch { return true; } })();
+    const openNew = forceNewTab || inIframe || !!(settingsCache && settingsCache.openInNewTab);
+    if (openNew) {
+        const a = document.createElement('a');
+        a.href = targetUrl;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    } else {
+        location.href = targetUrl;
+    }
 }
 
 async function goSearch(forceNewTab = false) {
@@ -1505,22 +1801,25 @@ async function goSearch(forceNewTab = false) {
     const raw = inp.value.trim(); if (!raw) return;
 
     const bang = parseBangQuery(raw);
-    if (bang) {
-        if (!bang.query) { toast(`Введите запрос после ${bang.bang}`); return; }
-        hideSuggest();
-        navigateTo(bang.url + encodeURIComponent(bang.query), forceNewTab);
+    if (bang && !bang.query) {
+        toast(`Введите запрос после ${bang.bang}`);
         return;
     }
 
-    const asUrl = normalizeUrl(raw);
-    const isUrl = /^https?:\/\//i.test(raw) || (asUrl !== '' && !raw.includes(' '));
-    if (!isUrl) {
+    const dur = animDur(180);
+    if (dur) $('#search-go')?.animate?.([{ transform: 'scale(.88)' }, { transform: 'none' }], { duration: dur, easing: EASE });
+
+    const asUrl = bang ? '' : normalizeUrl(raw);
+    const isUrl = !bang && (/^https?:\/\//i.test(raw) || (asUrl !== '' && !raw.includes(' ')));
+    if (!isUrl && (settingsCache || DEFAULT_SETTINGS).saveSearchHistory !== false) {
         const low = raw.toLowerCase();
         qHistory = [{ id: String(Date.now()), q: raw }, ...qHistory.filter(h => h.q.toLowerCase() !== low)].slice(0, HISTORY_LIMIT);
         await store.setHistory(qHistory);
     }
     hideSuggest();
-    const targetUrl = isUrl ? asUrl : ENGINES[engine].url + encodeURIComponent(raw);
+    const targetUrl = bang
+        ? bang.url + encodeURIComponent(bang.query)
+        : (isUrl ? asUrl : ENGINES[engine].url + encodeURIComponent(raw));
     navigateTo(targetUrl, forceNewTab);
 }
 
@@ -1533,17 +1832,26 @@ async function initSearch(preloaded, history) {
     if (searchBound) return;
     searchBound = true;
 
+    const engBtn = $('#engine-btn');
     const cycleEngine = dir => {
         const keys = Object.keys(ENGINES);
         engine = keys[(keys.indexOf(engine) + dir + keys.length) % keys.length];
         store.updateSettings(st => ({ ...st, engine }));
         paintEngine();
+        const dur = animDur(180);
+        if (dur && engBtn) {
+            engBtn.getAnimations?.().forEach(a => a.cancel());
+            engBtn.animate?.([{ transform: `scale(.78) rotate(${dir * -14}deg)` }, { transform: 'none' }], { duration: dur, easing: EASE });
+        }
     };
-    const engBtn = $('#engine-btn');
     engBtn?.addEventListener('click', e => cycleEngine(e.shiftKey ? -1 : 1));
     engBtn?.addEventListener('contextmenu', e => { e.preventDefault(); cycleEngine(-1); });
+    engBtn?.addEventListener('wheel', e => {
+        if (!e.deltaY) return;
+        e.preventDefault();
+        cycleEngine(e.deltaY > 0 ? 1 : -1);
+    }, { passive: false });
 
-    const debouncedSuggest = debounce(renderSuggest, 90);
     searchInput()?.addEventListener('input', () => {
         syncSearchClearBtn();
         debouncedSuggest();
@@ -1565,12 +1873,20 @@ async function initSearch(preloaded, history) {
         }
         if (e.key === 'Enter' && !e.isComposing) {
             const newTab = e.ctrlKey || e.metaKey || e.shiftKey;
-            const li = sugSel >= 0 && !suggestBox().hidden ? suggestList().children[sugSel] : null;
+            const box = suggestBox();
+            const li = sugSel >= 0 && box && !box.hidden && !box.classList.contains('closing') ? suggestList().children[sugSel] : null;
             if (li) {
                 if (li.dataset.url) {
                     e.preventDefault();
                     hideSuggest();
                     navigateTo(normalizeUrl(li.dataset.url), newTab);
+                    return;
+                }
+                if (li.dataset.bang) {
+                    e.preventDefault();
+                    e.target.value = li.dataset.bang + ' ';
+                    syncSearchClearBtn();
+                    renderSuggest();
                     return;
                 }
                 if (li.dataset.hq) e.target.value = li.dataset.hq;
@@ -1579,9 +1895,24 @@ async function initSearch(preloaded, history) {
             }
             goSearch(newTab);
         }
+        if (e.key === 'Tab') {
+            const box = suggestBox();
+            if (box && !box.hidden && !box.classList.contains('closing')) {
+                const candidate = sugSel >= 0 ? suggestList().children[sugSel] : suggestList().children[0];
+                if (candidate && candidate.dataset.bang) {
+                    e.preventDefault();
+                    e.target.value = candidate.dataset.bang + ' ';
+                    syncSearchClearBtn();
+                    renderSuggest();
+                    return;
+                }
+            }
+            hideSuggest();
+            return;
+        }
         if (e.key === 'Escape') {
             const box = suggestBox();
-            if (box && !box.hidden) {
+            if (box && !box.hidden && !box.classList.contains('closing')) {
                 hideSuggest();
             } else if (e.target.value) {
                 e.target.value = '';
@@ -1591,7 +1922,15 @@ async function initSearch(preloaded, history) {
     });
 
     apiStorage.onChanged((changes, area) => {
-        if (area === 'local' && changes.history) qHistory = normalizeHistory(changes.history.newValue);
+        if (area === 'local' && changes.history) {
+            const next = normalizeHistory(changes.history.newValue);
+            const sig = JSON.stringify(next);
+            if (sig === store.histSig) return;
+            store.histSig = sig;
+            qHistory = next;
+            const box = suggestBox();
+            if (box && !box.hidden && !box.classList.contains('closing')) renderSuggest();
+        }
     });
 
     const sl = suggestList();
@@ -1600,21 +1939,18 @@ async function initSearch(preloaded, history) {
     });
     if (sl && !sl._kbDelegated) {
         sl._kbDelegated = true;
-        sl.addEventListener('click', e => {
+        const onSuggestActivate = (e, forceNew) => {
             const li = e.target.closest('li');
             if (!li) return;
-            if (li.dataset.url) {
-                hideSuggest();
-                navigateTo(normalizeUrl(li.dataset.url), e.ctrlKey || e.metaKey || e.shiftKey);
-                return;
-            }
-            if (e.target.closest('[title="Вставить в поле"]')) {
+            if (e.target.closest('.fill')) {
+                if (forceNew) return;
                 e.stopPropagation();
                 const inp = searchInput();
                 if (inp && li.dataset.hq) { inp.value = li.dataset.hq; inp.focus(); renderSuggest(); }
                 return;
             }
             if (e.target.closest('.del')) {
+                if (forceNew) return;
                 e.stopPropagation();
                 if (li.dataset.hid) {
                     qHistory = qHistory.filter(x => x.id !== li.dataset.hid);
@@ -1623,11 +1959,37 @@ async function initSearch(preloaded, history) {
                 }
                 return;
             }
+            const newTab = forceNew || e.ctrlKey || e.metaKey || e.shiftKey;
+            if (li.dataset.url) {
+                hideSuggest();
+                navigateTo(normalizeUrl(li.dataset.url), newTab);
+                return;
+            }
+            if (li.dataset.bang) {
+                const inp = searchInput();
+                if (inp) {
+                    inp.value = li.dataset.bang + ' ';
+                    syncSearchClearBtn();
+                    inp.focus();
+                    renderSuggest();
+                }
+                return;
+            }
             if (li.dataset.hq) {
                 const inp = searchInput();
                 if (inp) inp.value = li.dataset.hq;
             }
-            goSearch(e.ctrlKey || e.metaKey || e.shiftKey);
+            goSearch(newTab);
+        };
+        sl.addEventListener('click', e => onSuggestActivate(e, false));
+        sl.addEventListener('auxclick', e => { if (e.button === 1) { e.preventDefault(); onSuggestActivate(e, true); } });
+        sl.addEventListener('contextmenu', e => {
+            const li = e.target.closest('li.sc-hit');
+            if (li && li.dataset.catId && li.dataset.scId) {
+                e.preventDefault();
+                hideSuggest();
+                openScModal(li.dataset.catId, li.dataset.scId);
+            }
         });
     }
     $('#search-go')?.addEventListener('click', e => goSearch(e.ctrlKey || e.metaKey || e.shiftKey));
@@ -1670,22 +2032,63 @@ function renderCats(data, force = false) {
                 const flags = `${!!curS.numHotkeys}`;
                 catsSig = (pending ? pending.sig : JSON.stringify(categories) + '|' + flags);
                 const wrap = $('#cats'); if (!wrap) return;
-                const frag = document.createDocumentFragment();
-                const state = { hkCounter: 0, showHk: !!curS.numHotkeys };
-                categories.forEach(cat => frag.append(buildCard(cat, state)));
-                wrap.replaceChildren(frag);
+                const dur = !document.documentElement.classList.contains('intro') ? animDur(180) : 0;
+                const oldCards = new Map(), oldChips = new Map();
+                const prevCats = dur ? new Map() : null, prevChips = dur ? new Map() : null;
+                if (wrap.childElementCount) {
+                    for (const card of wrap.querySelectorAll('.cat-card[data-id]')) {
+                        oldCards.set(card.dataset.id, card);
+                        if (dur) prevCats.set(card.dataset.id, card.getBoundingClientRect());
+                    }
+                    for (const ch of wrap.querySelectorAll('.chip[data-id]')) {
+                        oldChips.set(ch.dataset.id, ch);
+                        if (dur) prevChips.set(ch.dataset.id, ch.getBoundingClientRect());
+                    }
+                    if (dur) {
+                        oldCards.forEach(c => c.getAnimations?.().forEach(a => a.cancel()));
+                        oldChips.forEach(c => c.getAnimations?.().forEach(a => a.cancel()));
+                    }
+                }
+                const state = { hkCounter: 0, showHk: !!curS.numHotkeys, oldCards, oldChips };
+                const nextCards = categories.map(cat => buildCard(cat, state));
+                if (wrap.children.length !== nextCards.length || nextCards.some((n, i) => wrap.children[i] !== n)) {
+                    wrap.replaceChildren(...nextCards);
+                }
+                if (prevCats) {
+                    for (const card of nextCards) {
+                        const prevCat = prevCats.get(card.dataset.id);
+                        let cardDx = 0, cardDy = 0;
+                        if (prevCat) {
+                            const curCat = card.getBoundingClientRect();
+                            cardDx = prevCat.left - curCat.left;
+                            cardDy = prevCat.top - curCat.top;
+                            if (cardDx || cardDy) {
+                                card.animate?.([{ transform: `translate3d(${cardDx}px,${cardDy}px,0)` }, { transform: 'none' }], { duration: dur, easing: EASE });
+                            }
+                            for (const ch of card.querySelectorAll('.chip[data-id]')) {
+                                const prev = prevChips.get(ch.dataset.id);
+                                if (prev) {
+                                    const cur = ch.getBoundingClientRect();
+                                    const dx = (prev.left - cur.left) - cardDx, dy = (prev.top - cur.top) - cardDy;
+                                    if (dx || dy) {
+                                        ch.animate?.([{ transform: `translate3d(${dx}px,${dy}px,0)` }, { transform: 'none' }], { duration: dur, easing: EASE });
+                                    }
+                                } else {
+                                    ch.animate?.([{ opacity: 0, transform: 'scale(.86)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
+                                }
+                            }
+                        } else {
+                            card.animate?.([{ opacity: 0, transform: 'translateY(10px) scale(.96)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
+                        }
+                    }
+                }
             } while (catsDirty);
         } finally { catsBusy = false; }
     })();
     return catsRun;
 }
 
-function buildCard(cat, state = { hkCounter: 0, showHk: false }) {
-    const card = el('div', {
-        class: 'cat-card',
-        dataset: { id: cat.id }
-    });
-
+function buildCardHead(cat) {
     let icoNode;
     if (cat.image) {
         icoNode = el('img', {
@@ -1695,8 +2098,7 @@ function buildCard(cat, state = { hkCounter: 0, showHk: false }) {
     } else {
         icoNode = el('span', { class: 'cat-ico' }, cat.icon || '');
     }
-
-    const head = el('div', {
+    return el('div', {
         class: 'cat-head',
         title: 'Перетащите для сортировки • ПКМ — изменить категорию'
     },
@@ -1707,13 +2109,36 @@ function buildCard(cat, state = { hkCounter: 0, showHk: false }) {
         title: 'Добавить ярлык',
         'aria-label': 'Добавить ярлык в «' + cat.name + '»'
     }, '＋'));
+}
 
-    const chips = el('div', { class: 'chips' });
-    (cat.shortcuts || []).forEach(sc => {
+function buildCard(cat, state = { hkCounter: 0, showHk: false }) {
+    const headSig = `${cat.name || ''}\0${cat.icon || ''}\0${cat.image || ''}`;
+    let card = state.oldCards?.get(cat.id);
+    let chips;
+    if (card) {
+        if (card._headSig !== headSig) {
+            card._headSig = headSig;
+            card.firstElementChild?.replaceWith(buildCardHead(cat));
+        }
+        chips = card.querySelector('.chips');
+    } else {
+        card = el('div', { class: 'cat-card', dataset: { id: cat.id } });
+        card._headSig = headSig;
+        chips = el('div', { class: 'chips' });
+        card.append(buildCardHead(cat), chips);
+    }
+    const nextChips = (cat.shortcuts || []).map(sc => {
         const hkNum = state.showHk && state.hkCounter < 9 ? ++state.hkCounter : 0;
-        chips.append(buildChip(cat, sc, hkNum));
+        const sig = `${sc.title || ''}\0${sc.url || ''}\0${sc.icon || ''}\0${hkNum}`;
+        const old = state.oldChips?.get(sc.id);
+        if (old && old._sig === sig) return old;
+        const ch = buildChip(cat, sc, hkNum);
+        ch._sig = sig;
+        return ch;
     });
-    card.append(head, chips);
+    if (chips.children.length !== nextChips.length || nextChips.some((n, i) => chips.children[i] !== n)) {
+        chips.replaceChildren(...nextChips);
+    }
     return card;
 }
 
@@ -1729,21 +2154,23 @@ function clearDrag() {
 function buildChip(cat, sc, hkNum = 0) {
     const chip = el('div', {
         class: 'chip', draggable: 'true', tabindex: 0, role: 'link',
+        title: sc.title || sc.url || '',
         'aria-label': sc.title || sc.url || 'Ярлык',
         dataset: { id: sc.id, url: sc.url || '' }
     });
     let ico;
     const fallbackChar = ((sc.title || '').trim()[0] || '🌐').toUpperCase();
-    if (sc.icon && (/^https?:/.test(sc.icon) || sc.icon.startsWith('data:'))) {
-        ico = el('img', { src: sc.icon, alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, fallbackChar)) });
+    const makeFb = () => el('span', {}, fallbackChar);
+    if (isIconUrl(sc.icon)) {
+        ico = el('img', { src: sc.icon, alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(makeFb()) });
     } else if (sc.icon) {
         ico = el('span', {}, sc.icon);
     } else {
         const fav = faviconOf(sc.url);
         if (fav) {
-            ico = el('img', { src: fav, alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => e.target.replaceWith(el('span', {}, fallbackChar)) });
+            ico = el('img', { src: fav, alt: '', draggable: 'false', decoding: 'async', loading: 'lazy', onerror: e => onFavError(e, sc.url, makeFb) });
         } else {
-            ico = el('span', {}, fallbackChar);
+            ico = makeFb();
         }
     }
     chip.append(
@@ -1754,21 +2181,25 @@ function buildChip(cat, sc, hkNum = 0) {
     return chip;
 }
 
-async function saveCats() {
+async function saveCats(skipRender = false) {
     await store.setCategories(categories);
-    renderCats(categories);
+    if (!skipRender) await renderCats(categories, true);
+    const sg = $('#suggest');
+    if (sg && !sg.hidden) renderSuggest();
 }
 
 function moveChip(from, scId, to, targetId, after) {
     const s = categories.find(c => c.id === from), d = categories.find(c => c.id === to);
-    if (!s || !d || targetId === scId || (from === to && !targetId)) return;
+    if (!s || !d || targetId === scId) return;
     const idx = s.shortcuts.findIndex(x => x.id === scId);
     if (idx === -1) return;
+    if (from === to && !targetId && idx === s.shortcuts.length - 1) return;
     const [sc] = s.shortcuts.splice(idx, 1);
     let pos = d.shortcuts.length;
     const t = targetId ? d.shortcuts.findIndex(x => x.id === targetId) : -1;
     if (t !== -1) pos = t + (after ? 1 : 0);
     d.shortcuts.splice(pos, 0, sc);
+    if (from === to && pos === idx) return;
     saveCats();
 }
 
@@ -1792,27 +2223,37 @@ function flipReorder(wrap, mutate, skipNode) {
 function startCatDrag(e, card, head) {
     if (e.button !== 0 || e.target.closest('button')) return;
     const wrap = card.parentElement, sx = e.clientX, sy = e.clientY, pid = e.pointerId;
-    let on = false, ph = null, baseX = 0, baseY = 0, lock = 0, rafId = 0, lastX = sx, lastY = sy;
+    let on = false, ph = null, origNext = null, lock = 0, rafId = 0, lastX = sx, lastY = sy, lastSwap = null;
     let ended = false;
-    try { head.setPointerCapture(pid); } catch {}
 
     const step = () => {
         rafId = 0;
         if (ended || !on) return;
         const x = lastX, y = lastY;
         card.style.transform = `translate3d(${x - sx}px,${y - sy}px,0)`;
-        if (y < 70) window.scrollBy(0, -14); else if (y > innerHeight - 70) window.scrollBy(0, 14);
+        let scrolled = false;
+        if (y < 70) { window.scrollBy(0, -14); scrolled = true; }
+        else if (y > innerHeight - 70) { window.scrollBy(0, 14); scrolled = true; }
         const now = performance.now();
-        if (now < lock) return;
-        for (const n of wrap.children) {
-            if (n === card || n === ph) continue;
-            const q = n.getBoundingClientRect();
-            if (x >= q.left && x <= q.right && y >= q.top && y <= q.bottom) {
+        if (now >= lock) {
+            let hit = null, overPh = false;
+            for (const n of wrap.children) {
+                if (n === card) continue;
+                const q = n.getBoundingClientRect();
+                if (x >= q.left && x <= q.right && y >= q.top && y <= q.bottom) {
+                    if (n === ph) overPh = true;
+                    else hit = n;
+                    break;
+                }
+            }
+            if (!hit) { if (!overPh) lastSwap = null; }
+            else if (hit !== lastSwap) {
+                lastSwap = hit;
                 lock = now + 170;
-                flipReorder(wrap, () => (ph.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) ? n.after(ph) : n.before(ph), card);
-                break;
+                flipReorder(wrap, () => (ph.compareDocumentPosition(hit) & Node.DOCUMENT_POSITION_FOLLOWING) ? hit.after(ph) : hit.before(ph), card);
             }
         }
+        if (scrolled && !rafId) rafId = requestAnimationFrame(step);
     };
 
     const move = ev => {
@@ -1822,6 +2263,9 @@ function startCatDrag(e, card, head) {
         if (!on) {
             if (Math.hypot(x - sx, y - sy) < 6) return;
             on = true;
+            try { head.setPointerCapture(pid); } catch {}
+            origNext = card.nextElementSibling;
+            card.getAnimations?.().forEach(a => a.cancel());
             const r = card.getBoundingClientRect();
             ph = el('div', { class: 'cat-ph' });
             ph.style.height = r.height + 'px';
@@ -1831,11 +2275,6 @@ function startCatDrag(e, card, head) {
                 position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px',
                 height: r.height + 'px', zIndex: 60, pointerEvents: 'none', margin: 0, willChange: 'transform'
             });
-            const r2 = card.getBoundingClientRect();
-            baseX = r.left - (r2.left - r.left);
-            baseY = r.top - (r2.top - r.top);
-            card.style.left = baseX + 'px';
-            card.style.top = baseY + 'px';
             document.body.classList.add('cat-dragging');
         }
         if (!rafId) rafId = requestAnimationFrame(step);
@@ -1843,42 +2282,59 @@ function startCatDrag(e, card, head) {
 
     const onKey = ev => { if (ev.key === 'Escape') end({ pointerId: pid }, true); };
     const onBlur = () => end({ pointerId: pid }, true);
+    const onScroll = () => { if (on && !ended && !rafId) rafId = requestAnimationFrame(step); };
     const end = (ev, cancel) => {
-        if (ev.pointerId !== pid) return;
+        if (ended || (ev && ev.pointerId != null && ev.pointerId !== pid)) return;
         ended = true;
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         window.removeEventListener('keydown', onKey);
         window.removeEventListener('blur', onBlur);
+        window.removeEventListener('scroll', onScroll);
+        window.removeEventListener('contextmenu', cancelUp, true);
         head.removeEventListener('pointermove', move);
         head.removeEventListener('pointerup', up);
         head.removeEventListener('pointercancel', cancelUp);
-        try { head.releasePointerCapture(pid); } catch {}
+        head.removeEventListener('lostpointercapture', cancelUp);
+        if (on) { try { head.releasePointerCapture(pid); } catch {} }
         if (!on) return;
         document.body.classList.remove('cat-dragging');
         const from = card.getBoundingClientRect();
         for (const p of ['position', 'left', 'top', 'width', 'height', 'zIndex', 'pointerEvents', 'margin', 'transform', 'willChange']) card.style[p] = '';
         card.classList.remove('dragging');
-        if (cancel) { ph.replaceWith(card); return; }
-        ph.replaceWith(card);
+        if (cancel) {
+            flipReorder(wrap, () => {
+                ph.remove();
+                if (origNext && origNext.parentNode === wrap) origNext.before(card);
+                else wrap.append(card);
+            }, card);
+        } else if (ph.parentNode) {
+            ph.replaceWith(card);
+        }
         const to = card.getBoundingClientRect();
         const dur = animDur(160);
-        if (dur) {
+        if (dur && (from.left !== to.left || from.top !== to.top)) {
             card.animate([{ transform: `translate3d(${from.left - to.left}px,${from.top - to.top}px,0)` }, { transform: 'none' }],
                          { duration: dur, easing: EASE });
         }
+        if (cancel) return;
         const byId = new Map(categories.map(c => [c.id, c]));
         const next = [...wrap.children].map(n => byId.get(n.dataset.id)).filter(Boolean);
         if (next.length === categories.length && next.some((c, i) => c !== categories[i])) {
             categories = next;
-            saveCats();
+            const hasHk = !!settingsCache?.numHotkeys;
+            if (!hasHk) catsSig = JSON.stringify(categories) + '|false';
+            saveCats(!hasHk);
         }
     };
     const up = ev => end(ev, false), cancelUp = ev => end(ev, true);
     window.addEventListener('keydown', onKey);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('contextmenu', cancelUp, true);
     head.addEventListener('pointermove', move);
     head.addEventListener('pointerup', up);
     head.addEventListener('pointercancel', cancelUp);
+    head.addEventListener('lostpointercapture', cancelUp);
 }
 
 function updateIconPreview(iconValue, urlValue) {
@@ -1886,18 +2342,36 @@ function updateIconPreview(iconValue, urlValue) {
     const hint = $('#sc-icon-hint');
     if (!preview) return;
 
-    preview.onerror = () => { preview.hidden = true; };
-    if (iconValue && (/^https?:/.test(iconValue) || iconValue.startsWith('data:'))) {
-        preview.src = iconValue;
+    delete preview.dataset.fbTried;
+    preview.onerror = () => {
+        if (!iconValue && urlValue && !preview.dataset.fbTried) {
+            preview.dataset.fbTried = '1';
+            const alt = faviconFallbackOf(urlValue);
+            if (alt && preview.src !== alt) { preview.src = alt; return; }
+        }
+        preview.hidden = true;
+    };
+    preview.onload = () => {
+        const dur = animDur(180);
+        if (dur) preview.animate?.([{ opacity: 0, transform: 'scale(.88)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
+    };
+    if (isIconUrl(iconValue)) {
+        if (preview.getAttribute('src') !== iconValue) preview.src = iconValue;
         preview.hidden = false;
         if (hint) hint.textContent = 'Своя иконка';
     } else if (iconValue) {
         preview.hidden = true;
+        preview.removeAttribute('src');
         if (hint) hint.textContent = 'Эмодзи: ' + iconValue;
     } else {
         const src = urlValue ? faviconOf(urlValue) : '';
-        if (src) { preview.src = src; preview.hidden = false; }
-        else preview.hidden = true;
+        if (src) {
+            if (preview.getAttribute('src') !== src) preview.src = src;
+            preview.hidden = false;
+        } else {
+            preview.hidden = true;
+            preview.removeAttribute('src');
+        }
         if (hint) hint.textContent = 'Дефолтная иконка по домену';
     }
 }
@@ -1924,48 +2398,119 @@ async function uploadShortcutIcon() {
     toast('Иконка загружена');
 }
 
+function resetConfirm(btn) {
+    if (!btn) return;
+    if (btn._confirmT) { clearTimeout(btn._confirmT); btn._confirmT = 0; }
+    if (btn.dataset.origText) {
+        btn.textContent = btn.dataset.origText;
+        delete btn.dataset.origText;
+    }
+    delete btn.dataset.confirm;
+}
+
+function armConfirm(btn, confirmText = 'Точно удалить?') {
+    if (!btn) return false;
+    if (btn.dataset.confirm === '1') {
+        resetConfirm(btn);
+        return true;
+    }
+    btn.dataset.origText = btn.textContent;
+    btn.dataset.confirm = '1';
+    btn.textContent = confirmText;
+    if (btn._confirmT) clearTimeout(btn._confirmT);
+    btn._confirmT = setTimeout(() => resetConfirm(btn), 3200);
+    return false;
+}
+
 function openScModal(catId, scId) {
-    scModal = { catId, scId };
-    const cat = categories.find(c => c.id === catId);
-    const sc = cat?.shortcuts?.find(x => x.id === scId);
+    bindScModal();
+    const cat = categories.find(c => c.id === catId) || (scId ? categories.find(c => c.shortcuts?.some(x => x.id === scId)) : null);
+    const sc = scId ? cat?.shortcuts?.find(x => x.id === scId) : null;
+    scModal = { catId: cat?.id || catId, scId: sc?.id || null };
+    const catSel = $('#sc-cat');
+    if (catSel) {
+        catSel.replaceChildren(...categories.map(c =>
+            el('option', { value: c.id }, (c.icon ? c.icon + ' ' : '') + (c.name || 'Категория'))
+        ));
+        catSel.value = scModal.catId || (categories[0]?.id ?? '');
+    }
     const name = $('#sc-name'), url = $('#sc-url'), icon = $('#sc-icon');
     if (name) name.value = sc?.title || '';
     if (url) url.value = sc?.url || '';
     if (icon) icon.value = sc?.icon || '';
     updateIconPreview(sc?.icon || '', sc?.url || '');
     const h = $('#sc-modal-heading'); if (h) h.textContent = sc ? 'Изменить ярлык' : 'Новый ярлык';
-    const d = $('#sc-delete'); if (d) d.style.display = sc ? '' : 'none';
+    const d = $('#sc-delete'); if (d) d.hidden = !sc;
     toggleOverlay($('#sc-modal'), true, '#sc-name');
 }
 
 let overlayReturn = null;
 function toggleOverlay(ov, open, focusSel = '.close-btn') {
-    if (!ov || ov.hidden === !open) return;
-    ov.hidden = !open;
-    const anyOpen = !!document.querySelector('.overlay:not([hidden])');
-    for (const n of document.querySelectorAll('.topbar,.panel')) n.inert = anyOpen;
+    if (!ov) return;
     if (open) {
+        const wasClosing = ov.classList.contains('closing');
+        if (ov._closeT) { clearTimeout(ov._closeT); ov._closeT = 0; }
+        const wasOpen = !ov.hidden && !wasClosing;
+        ov.classList.remove('closing');
+        ov.hidden = false;
+        if (wasClosing) {
+            const m = ov.querySelector('.modal');
+            const dur = animDur(180);
+            if (dur && m) m.animate?.([{ opacity: 0, transform: 'translate3d(0,8px,0) scale(.975)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
+        }
+        for (const n of document.querySelectorAll('.topbar,.panel')) n.inert = true;
+        if (wasOpen) return;
         if (!overlayReturn) overlayReturn = document.activeElement;
         ov.querySelector(focusSel)?.focus({ preventScroll: true });
         const body = ov.querySelector('.modal-body');
         if (body) body.scrollTop = 0;
-    } else if (!anyOpen) {
-        overlayReturn?.focus?.({ preventScroll: true });
-        overlayReturn = null;
+    } else {
+        if (ov.hidden || ov.classList.contains('closing')) return;
+        if (ov.id === 'sc-modal') {
+            scModal = { catId: null, scId: null };
+            const p = $('#sc-icon-preview'); if (p) { p.hidden = true; p.removeAttribute('src'); }
+        } else if (ov.id === 'cat-modal') {
+            catModal = { id: null, image: '' };
+            resetConfirm($('#cat-delete'));
+            const p = $('#cat-img-preview'); if (p) { p.hidden = true; p.removeAttribute('src'); }
+        } else if (ov.id === 'settings-overlay') {
+            resetConfirm($('#reset-btn'));
+        }
+        const dur = animDur(160);
+        if (dur) {
+            ov.classList.add('closing');
+            ov._closeT = setTimeout(() => {
+                ov.classList.remove('closing');
+                ov.hidden = true;
+                ov._closeT = 0;
+            }, dur);
+        } else {
+            ov.hidden = true;
+        }
+        const anyOpen = !!document.querySelector('.overlay:not([hidden]):not(.closing)');
+        for (const n of document.querySelectorAll('.topbar,.panel')) n.inert = anyOpen;
+        if (!anyOpen) {
+            if (overlayReturn && overlayReturn.isConnected) overlayReturn.focus?.({ preventScroll: true });
+            overlayReturn = null;
+        }
     }
 }
-const closeOverlays = () => document.querySelectorAll('.overlay:not([hidden])').forEach(ov => toggleOverlay(ov, false));
+const closeOverlays = () => document.querySelectorAll('.overlay:not([hidden]):not(.closing)').forEach(ov => toggleOverlay(ov, false));
 
-function closeScModal() { toggleOverlay($('#sc-modal'), false); scModal = { catId: null, scId: null }; }
+function closeScModal() { toggleOverlay($('#sc-modal'), false); }
 
 let scModalBound = false;
 function bindScModal() {
     if (scModalBound) return;
     scModalBound = true;
     const form = $('#sc-form'); if (!form) return;
-    form.addEventListener('submit', e => {
+    form.addEventListener('submit', async e => {
         e.preventDefault();
-        const cat = categories.find(c => c.id === scModal.catId); if (!cat) return;
+        const origCat = categories.find(c => c.id === scModal.catId)
+            || (scModal.scId ? categories.find(c => c.shortcuts?.some(x => x.id === scModal.scId)) : null);
+        const targetCatId = $('#sc-cat')?.value || scModal.catId;
+        const targetCat = categories.find(c => c.id === targetCatId) || origCat;
+        if (!targetCat) return;
         const normUrl = normalizeUrl($('#sc-url')?.value);
         if (!normUrl) { toast('Не похоже на адрес сайта. Пример: example.com', 'error'); return; }
         let title = ($('#sc-name')?.value || '').trim();
@@ -1976,27 +2521,41 @@ function bindScModal() {
                 title = title.charAt(0).toUpperCase() + title.slice(1);
             } catch { title = normUrl; }
         }
+        const rawIcon = ($('#sc-icon')?.value || '').trim();
+        const icon = (!rawIcon || /^(https?:|data:)/i.test(rawIcon)) ? rawIcon : (normalizeUrl(rawIcon) || rawIcon);
         const data = {
             title,
             url: normUrl,
-            icon: ($('#sc-icon')?.value || '').trim()
+            icon
         };
-        if (scModal.scId) {
-            const sc = cat.shortcuts.find(x => x.id === scModal.scId);
-            if (sc) Object.assign(sc, data);
-            toast('Ярлык обновлён');
+        const isEdit = !!(scModal.scId && origCat);
+        if (isEdit) {
+            const idx = origCat.shortcuts.findIndex(x => x.id === scModal.scId);
+            if (idx !== -1) {
+                const sc = origCat.shortcuts[idx];
+                Object.assign(sc, data);
+                if (targetCat !== origCat) {
+                    origCat.shortcuts.splice(idx, 1);
+                    targetCat.shortcuts.push(sc);
+                }
+            }
         } else {
-            cat.shortcuts.push({ id: uid(), ...data });
-            toast('Ярлык добавлен');
+            targetCat.shortcuts.push({ id: uid(), ...data });
         }
-        closeScModal(); saveCats();
+        closeScModal();
+        await saveCats();
+        toast(isEdit ? 'Ярлык обновлён' : 'Ярлык добавлен');
     });
-    $('#sc-delete')?.addEventListener('click', () => {
-        const cat = categories.find(c => c.id === scModal.catId);
-        const sc = cat?.shortcuts.find(x => x.id === scModal.scId);
-        if (!sc || !confirm(`Удалить ярлык «${sc.title || sc.url}»?`)) return;
-        cat.shortcuts = cat.shortcuts.filter(x => x.id !== scModal.scId);
-        closeScModal(); saveCats(); toast('Ярлык удалён');
+    $('#sc-delete')?.addEventListener('click', async () => {
+        const scId = scModal.scId;
+        if (!scId) return;
+        const cat = categories.find(c => c.id === scModal.catId && c.shortcuts?.some(x => x.id === scId))
+            || categories.find(c => c.shortcuts?.some(x => x.id === scId));
+        if (!cat) return;
+        cat.shortcuts = cat.shortcuts.filter(x => x.id !== scId);
+        closeScModal();
+        await saveCats();
+        toast('Ярлык удалён');
     });
 
     $('#sc-icon-upload')?.addEventListener('click', uploadShortcutIcon);
@@ -2018,22 +2577,75 @@ function bindScModal() {
 
 const CAT_EMOJIS = ['🌐','🎵','🎮','💻','🛒','📚','🎨','📰','🏠','📱','🔧','💎','🚀','🎯','☕','📺','🌙','⭐','🎬','🧩'];
 let catModal = { id: null, image: '' };
+let catFormBound = false;
 
 function renderCatImage() {
     const img = $('#cat-img-preview'), has = !!catModal.image;
     img.hidden = !has;
-    if (has) img.src = catModal.image;
+    if (has) {
+        img.onload = () => {
+            const dur = animDur(180);
+            if (dur) img.animate?.([{ opacity: 0, transform: 'scale(.88)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
+        };
+        if (img.getAttribute('src') !== catModal.image) img.src = catModal.image;
+    } else {
+        img.removeAttribute('src');
+    }
     $('#cat-img-clear').hidden = !has;
     $('#cat-img-hint').textContent = has ? 'Картинка показывается вместо эмодзи' : 'Без картинки показывается эмодзи';
 }
 
+function bindCatForm() {
+    if (catFormBound) return;
+    catFormBound = true;
+    $('#cat-form')?.addEventListener('submit', async e => {
+        e.preventDefault();
+        const name = $('#cat-name').value.trim();
+        if (!name) return;
+        const fields = { name, icon: $('#cat-icon').value.trim(), image: catModal.image };
+        const cat = categories.find(c => c.id === catModal.id);
+        if (cat) Object.assign(cat, fields);
+        else categories.push({ id: uid(), shortcuts: [], ...fields });
+        toggleOverlay($('#cat-modal'), false);
+        await saveCats();
+        toast(cat ? 'Категория обновлена' : 'Категория добавлена');
+    });
+    $('#cat-sort-az')?.addEventListener('click', async () => {
+        const cat = categories.find(c => c.id === catModal.id);
+        if (!cat || (cat.shortcuts?.length || 0) < 2) return;
+        const collator = new Intl.Collator('ru', { sensitivity: 'base', numeric: true });
+        cat.shortcuts.sort((a, b) => collator.compare(a.title || a.url || '', b.title || b.url || ''));
+        await saveCats();
+        toast('Ярлыки отсортированы А–Я');
+    });
+    $('#cat-delete')?.addEventListener('click', async e => {
+        const cat = categories.find(c => c.id === catModal.id);
+        if (!cat) return;
+        if ((cat.shortcuts?.length || 0) > 0 && !armConfirm(e.currentTarget, 'Точно удалить?')) return;
+        categories = categories.filter(c => c !== cat);
+        toggleOverlay($('#cat-modal'), false);
+        await saveCats();
+        toast('Категория удалена');
+    });
+    $('#cat-img-upload')?.addEventListener('click', async () => {
+        const dataUrl = await pickImage(128);
+        if (dataUrl) { catModal.image = dataUrl; renderCatImage(); }
+    });
+    $('#cat-img-clear')?.addEventListener('click', () => { catModal.image = ''; renderCatImage(); });
+}
+
 function openCatModal(id) {
+    bindCatForm();
     const cat = categories.find(c => c.id === id);
     catModal = { id: cat ? cat.id : null, image: cat?.image || '' };
     $('#cat-modal-heading').textContent = cat ? 'Категория' : 'Новая категория';
     $('#cat-name').value = cat ? cat.name : '';
     $('#cat-icon').value = cat ? cat.icon : CAT_EMOJIS[Math.floor(Math.random() * CAT_EMOJIS.length)];
-    $('#cat-delete').hidden = !cat;
+    const delBtn = $('#cat-delete');
+    resetConfirm(delBtn);
+    if (delBtn) delBtn.hidden = !cat;
+    const sortBtn = $('#cat-sort-az');
+    if (sortBtn) sortBtn.hidden = (cat?.shortcuts?.length || 0) < 2;
     renderCatImage();
     toggleOverlay($('#cat-modal'), true, '#cat-name');
 }
@@ -2041,6 +2653,8 @@ function openCatModal(id) {
 function openChipUrl(chip, forceNewTab) {
     const u = normalizeUrl(chip.dataset.url);
     if (!u) return;
+    const dur = animDur(160);
+    if (dur) chip.animate?.([{ transform: 'scale(.93)' }, { transform: 'none' }], { duration: dur, easing: EASE });
     navigateTo(u, forceNewTab);
 }
 
@@ -2109,6 +2723,30 @@ function bindCatModal() {
                 document.body.classList.add('chip-dragging');
             }, 0);
         });
+        const resolveChipDrop = (card, e, dr) => {
+            const sy = window.scrollY;
+            if (dr.overCard !== card || dr.scrollY !== sy) {
+                dr.overCard = card;
+                dr.scrollY = sy;
+                dr.chipRects = [...card.querySelectorAll('.chip')].map(el => ({ el, id: el.dataset.id, r: el.getBoundingClientRect() }));
+            }
+            const x = e.clientX, y = e.clientY;
+            let hit = null;
+            const direct = e.target.closest('.chip');
+            if (direct && card.contains(direct)) {
+                hit = dr.chipRects.find(c => c.el === direct) || null;
+            } else {
+                let bestD = 14;
+                for (const c of dr.chipRects) {
+                    if (y < c.r.top - 6 || y > c.r.bottom + 6) continue;
+                    const dx = x < c.r.left ? c.r.left - x : (x > c.r.right ? x - c.r.right : 0);
+                    if (dx <= bestD) { bestD = dx; hit = c; }
+                }
+            }
+            if (!hit) return { target: null, after: false, self: false };
+            if (hit.id === dr.id) return { target: null, after: false, self: true };
+            return { target: hit.el, after: x > hit.r.left + hit.r.width / 2, self: false };
+        };
         wrap.addEventListener('dragover', e => {
             if (!dragState || dragState.type !== 'chip') return;
             const card = e.target.closest('.cat-card');
@@ -2119,20 +2757,16 @@ function bindCatModal() {
                 wrap.querySelectorAll('.cat-card.drag-over').forEach(c => { if (c !== card) c.classList.remove('drag-over'); });
                 card.classList.add('drag-over');
             }
-            const t = e.target.closest('.chip');
-            if (dragState.lastTarget !== t) {
+            const { target, after } = resolveChipDrop(card, e, dragState);
+            if (dragState.lastTarget !== target) {
                 if (dragState.lastTarget) dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
-                dragState.lastTarget = (t && t.dataset.id !== dragState.id) ? t : null;
-                dragState.lastRect = dragState.lastTarget ? dragState.lastTarget.getBoundingClientRect() : null;
+                dragState.lastTarget = target;
                 dragState.lastAfter = null;
             }
-            if (dragState.lastTarget && dragState.lastRect) {
-                const after = e.clientX > dragState.lastRect.left + dragState.lastRect.width / 2;
-                if (after !== dragState.lastAfter) {
-                    dragState.lastAfter = after;
-                    dragState.lastTarget.classList.toggle('chip-drop-after', after);
-                    dragState.lastTarget.classList.toggle('chip-drop-before', !after);
-                }
+            if (target && after !== dragState.lastAfter) {
+                dragState.lastAfter = after;
+                target.classList.toggle('chip-drop-after', after);
+                target.classList.toggle('chip-drop-before', !after);
             }
         });
         wrap.addEventListener('dragleave', e => {
@@ -2140,10 +2774,10 @@ function bindCatModal() {
             const card = e.target.closest('.cat-card');
             if (card && !card.contains(e.relatedTarget)) {
                 card.classList.remove('drag-over');
+                if (dragState.overCard === card) { dragState.overCard = null; dragState.chipRects = null; }
                 if (dragState.lastTarget && card.contains(dragState.lastTarget)) {
                     dragState.lastTarget.classList.remove('chip-drop-before', 'chip-drop-after');
                     dragState.lastTarget = null;
-                    dragState.lastRect = null;
                     dragState.lastAfter = null;
                 }
             }
@@ -2155,42 +2789,16 @@ function bindCatModal() {
             if (!card) return;
             e.preventDefault();
             e.stopPropagation();
+            const { target, after, self } = resolveChipDrop(card, e, dr);
             clearDrag();
-            const t = e.target.closest('.chip');
-            let after = false;
-            if (t) { const r = t.getBoundingClientRect(); after = e.clientX > r.left + r.width / 2; }
-            moveChip(dr.catId, dr.id, card.dataset.id, t && t.dataset.id, after);
+            if (self) return;
+            moveChip(dr.catId, dr.id, card.dataset.id, target && target.dataset.id, after);
         });
         wrap.addEventListener('dragend', e => {
             if (e.target.closest('.chip')) clearDrag();
         });
     }
     $('#add-cat')?.addEventListener('click', () => openCatModal(null));
-    $('#cat-form')?.addEventListener('submit', e => {
-        e.preventDefault();
-        const name = $('#cat-name').value.trim();
-        if (!name) return;
-        const fields = { name, icon: $('#cat-icon').value.trim(), image: catModal.image };
-        const cat = categories.find(c => c.id === catModal.id);
-        if (cat) Object.assign(cat, fields);
-        else categories.push({ id: uid(), collapsed: false, shortcuts: [], ...fields });
-        toggleOverlay($('#cat-modal'), false);
-        saveCats();
-        toast(cat ? 'Категория обновлена' : 'Категория добавлена');
-    });
-    $('#cat-delete')?.addEventListener('click', () => {
-        const cat = categories.find(c => c.id === catModal.id);
-        if (!cat || !confirm(`Удалить категорию «${cat.name}» вместе с ярлыками?`)) return;
-        categories = categories.filter(c => c !== cat);
-        toggleOverlay($('#cat-modal'), false);
-        saveCats();
-        toast('Категория удалена');
-    });
-    $('#cat-img-upload')?.addEventListener('click', async () => {
-        const dataUrl = await pickImage(128);
-        if (dataUrl) { catModal.image = dataUrl; renderCatImage(); }
-    });
-    $('#cat-img-clear')?.addEventListener('click', () => { catModal.image = ''; renderCatImage(); });
 }
 
 /* ---------- 11. Настройки ---------- */
@@ -2220,7 +2828,9 @@ function downscaleImage(file, max = 256) {
                 ctx.imageSmoothingQuality = 'high';
                 ctx.drawImage(img, 0, 0, w, h);
                 const webp = canvas.toDataURL('image/webp', 0.9);
-                resolve(webp && webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/png'));
+                const out = webp && webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/png');
+                canvas.width = canvas.height = 0;
+                resolve(out);
             } catch (err) { reject(err); }
             finally { URL.revokeObjectURL(url); }
         };
@@ -2235,13 +2845,14 @@ async function updateSetting(key, valueOrFn) {
     return store.updateSettings(s => ({ ...s, [key]: resolveValue(valueOrFn, s[key]) }));
 }
 
-async function updateAppearanceSetting(key, valueOrFn) {
+async function updateAppearanceSetting(key, valueOrFn, applyDom = true) {
     const s = await store.updateSettings(s => ({ ...s, appearance: { ...s.appearance, [key]: resolveValue(valueOrFn, s.appearance[key]) } }));
-    applyAppearance(s.appearance);
+    if (applyDom) applyAppearance(s.appearance);
 }
 
 async function setCustomColor(hex) {
     await store.updateSettings(s => ({ ...s, customColor: hex, theme: 'custom' }));
+    document.documentElement.dataset.theme = 'custom';
     document.body.dataset.theme = 'custom';
     appliedTheme = 'custom';
     applyCustomThemeVars(hex);
@@ -2252,16 +2863,36 @@ async function setCustomColor(hex) {
 const LIVE_SLIDER_VARS = {
     panelOpacity: v => ['--panel-opacity', v / 100],
     cardOpacity: v => ['--card-opacity', v / 100],
-    panelBlur: v => [['--panel-blur', v + 'px'], ['--panel-bf', v > 0 ? `blur(${v}px)` : 'none']],
+    panelBlur: v => {
+        document.documentElement.classList.toggle('no-blur', v <= 0);
+        return [['--panel-blur', v + 'px'], ['--panel-bf', v > 0 ? `blur(${v}px)` : 'none']];
+    },
     historyBlur: v => ['--sg-bf', v > 0 ? `blur(${v}px)` : 'none'],
     historyOpacity: v => ['--sg-op', v + '%'],
     settingsOpacity: v => ['--set-op', v + '%'],
     settingsBlur: v => ['--set-bf', v > 0 ? `blur(${v}px)` : 'none'],
+    panelWidth: v => ['--panel-width', v + 'px'],
+    panelPad: v => ['--panel-pad', v + 'px'],
+    panelMargin: v => ['--panel-mt', v + 'px'],
+    cardPad: v => ['--card-pad', v + 'px'],
+    gridGap: v => ['--grid-gap', v + 'px'],
+    chipGap: v => ['--chip-gap', v + 'px'],
+    chipMin: v => ['--chip-min', v + 'px'],
+    searchWidth: v => ['--search-width', v + '%'],
+    searchHeight: v => ['--search-height', v + 'px'],
+    avatarSize: v => ['--avatar-size', v + 'px'],
+    iconSize: v => ['--chip-ico-size', v + 'px'],
+    titleSize: v => ['--title-size', v + 'px'],
+    subSize: v => ['--sub-size', v + 'px'],
+    clockSize: v => ['--clock-size', v + 'px'],
+    chipFont: v => ['--chip-font', v + 'px'],
     'radius.panel': v => ['--radius-panel', v + 'px'],
     'radius.card': v => ['--radius-card', v + 'px'],
     'radius.button': v => ['--radius-button', v + 'px'],
     'radius.chip': v => ['--radius-chip', v + 'px'],
     'radius.input': v => ['--radius-input', v + 'px'],
+    'radius.search': v => ['--radius-search', v + 'px'],
+    'radius.avatar': v => ['--radius-avatar', v + '%'],
     'font.size': v => ['--font-size', v + 'px'],
     'font.weight': v => ['--font-weight', v],
     'font.lineHeight': v => ['--line-height', v],
@@ -2271,13 +2902,11 @@ const LIVE_SLIDER_VARS = {
     transitionSpeed: v => ['--transition-speed', v + 's']
 };
 
-function bindSlider(inputId, path, valueId, suffix, step = 1) {
+const fmtNum = v => typeof v === 'number' && v % 1 !== 0 ? String(Number(v.toFixed(2))) : String(v);
+
+function bindSlider(inputId, path, suffix, step = 1) {
+    const valueId = inputId + '-val';
     const parse = e => step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
-    const save = debounce(v => {
-        const parts = path.split('.');
-        if (parts.length === 1) updateAppearanceSetting(parts[0], v);
-        else updateAppearanceSetting(parts[0], prev => ({ ...prev, [parts[1]]: v }));
-    }, 120);
     let raf = 0, latest = 0;
     const applyLive = () => {
         raf = 0;
@@ -2288,10 +2917,16 @@ function bindSlider(inputId, path, valueId, suffix, step = 1) {
         if (Array.isArray(res[0])) res.forEach(([k, val]) => st.setProperty(k, val));
         else st.setProperty(res[0], res[1]);
     };
+    const save = saveDebounced(v => {
+        if (raf) { cancelAnimationFrame(raf); applyLive(); }
+        const parts = path.split('.');
+        if (parts.length === 1) updateAppearanceSetting(parts[0], v, false);
+        else updateAppearanceSetting(parts[0], prev => ({ ...prev, [parts[1]]: v }), false);
+    }, 120);
     on(inputId, 'input', e => {
         const v = parse(e);
         latest = v;
-        txt(valueId, (step < 1 && v % 1 !== 0 ? v.toFixed(2) : v) + suffix);
+        txt(valueId, fmtNum(v) + suffix);
         if (!raf) raf = requestAnimationFrame(applyLive);
         save(v);
     });
@@ -2300,18 +2935,21 @@ function bindSlider(inputId, path, valueId, suffix, step = 1) {
 function paintAvatar(url, title = '') {
     const img = document.getElementById('avatar-img'), fb = document.getElementById('avatar-fallback');
     if (!img || !fb) return;
-    img.onerror = () => { img.hidden = true; fb.hidden = false; };
+    const char = ((title || document.getElementById('main-title')?.textContent || 'K').trim()[0] || 'K').toUpperCase();
+    if (fb.textContent !== char) fb.textContent = char;
+    img.onerror = () => { img.hidden = true; img.removeAttribute('src'); fb.hidden = false; };
     if (url) {
-        img.src = url; img.hidden = false; fb.hidden = true;
+        if (img.getAttribute('src') !== url) img.src = url;
+        img.hidden = false; fb.hidden = true;
     } else {
         img.hidden = true;
+        img.removeAttribute('src');
         fb.hidden = false;
-        const char = (title || document.getElementById('main-title')?.textContent || 'K').trim()[0] || 'K';
-        fb.textContent = char.toUpperCase();
     }
 }
 
 function invalidateRuntimeState() {
+    cancelPendingSaves();
     settingsCache = null;
     categories = [];
     catsSig = '';
@@ -2321,14 +2959,59 @@ function invalidateRuntimeState() {
     bgMediaSig = '';
     bgAppliedSig = '';
     clockConfigSig = '';
+    lastCitiesSig = '';
+    lastGreetHour = -1;
+    geoCache.clear();
+    hideSuggest();
     if (bgObjectUrl) {
         try { URL.revokeObjectURL(bgObjectUrl); } catch {}
         bgObjectUrl = null;
     }
 }
 
+const SLIDERS = [
+    ['set-panel-opacity', 'panelOpacity', '%'],
+    ['set-card-opacity', 'cardOpacity', '%'],
+    ['set-panel-blur', 'panelBlur', 'px'],
+    ['set-history-blur', 'historyBlur', 'px'],
+    ['set-history-opacity', 'historyOpacity', '%'],
+    ['set-settings-opacity', 'settingsOpacity', '%'],
+    ['set-settings-blur', 'settingsBlur', 'px'],
+    ['set-panel-width', 'panelWidth', 'px', 10],
+    ['set-panel-margin', 'panelMargin', 'px', 2],
+    ['set-panel-pad', 'panelPad', 'px'],
+    ['set-card-pad', 'cardPad', 'px'],
+    ['set-grid-gap', 'gridGap', 'px'],
+    ['set-chip-gap', 'chipGap', 'px'],
+    ['set-chip-min', 'chipMin', 'px', 2],
+    ['set-search-width', 'searchWidth', '%'],
+    ['set-search-height', 'searchHeight', 'px', 2],
+    ['set-avatar-size', 'avatarSize', 'px', 2],
+    ['set-icon-size', 'iconSize', 'px', 2],
+    ['set-title-size', 'titleSize', 'px'],
+    ['set-sub-size', 'subSize', 'px'],
+    ['set-clock-size', 'clockSize', 'px'],
+    ['set-chip-font', 'chipFont', 'px'],
+    ['set-radius-panel', 'radius.panel', 'px'],
+    ['set-radius-card', 'radius.card', 'px'],
+    ['set-radius-button', 'radius.button', 'px'],
+    ['set-radius-chip', 'radius.chip', 'px'],
+    ['set-radius-input', 'radius.input', 'px'],
+    ['set-radius-search', 'radius.search', 'px'],
+    ['set-radius-avatar', 'radius.avatar', '%'],
+    ['set-font-size', 'font.size', 'px'],
+    ['set-font-weight', 'font.weight', ''],
+    ['set-line-height', 'font.lineHeight', '', 0.1],
+    ['set-ls', 'font.letterSpacing', 'em', 0.01],
+    ['set-ls-title', 'font.titleSpacing', 'em', 0.01],
+    ['set-ls-sub', 'font.subtitleSpacing', 'em', 0.01],
+    ['set-transition-speed', 'transitionSpeed', 's', 0.01]
+];
+const getByPath = (o, p) => p.includes('.') ? p.split('.').reduce((a, k) => a?.[k], o) : o?.[p];
+
 /* ---------- 11.1. Синхронизация UI настроек ---------- */
 function syncSettingsUI(s) {
+    initThemeSelector(s.theme || 'rose');
     const d = DEFAULT_SETTINGS.appearance;
     val('theme-select', s.theme || 'rose');
     syncThemeSwatches(s.theme || 'rose');
@@ -2338,49 +3021,41 @@ function syncSettingsUI(s) {
     val('set-city-a', s.cities?.[0] || '');
     val('set-city-b', s.cities?.[1] || '');
 
+    val('set-clock-format', s.clockFormat === '12h' ? '12h' : '24h');
     chk('set-clock-seconds', s.clockSeconds !== false);
     chk('set-clock-date', s.clockDate);
+    chk('set-hide-clocks', s.hideClocks);
     val('set-wx-unit', s.wxUnit || 'C');
     chk('set-wx-details', s.wxDetails);
     chk('set-open-newtab', s.openInNewTab);
+    chk('set-auto-focus-search', s.autoFocusSearch);
     chk('set-search-shortcuts', s.searchShortcuts !== false);
+    chk('set-save-history', s.saveSearchHistory !== false);
     chk('set-num-hotkeys', s.numHotkeys);
+    chk('set-hide-chip-names', s.hideChipNames);
+    chk('set-hide-avatar', s.hideAvatar);
+    chk('set-hide-hero-text', s.hideHeroText);
     val('set-chip-style', s.chipStyle || 'cards');
+    val('set-cat-columns', s.catColumns || 'auto');
     chk('set-hide-add-cat', s.hideAddCat);
 
     const bg = s.bg || {};
     val('set-bg-type', bg.type || 'none');
     val('set-bg-url', bg.url || '');
-    setSlider('set-bg-opacity', bg.opacity ?? 100, 'set-bg-opacity-val', '%');
+    setSlider('set-bg-opacity', bg.opacity ?? 100, '%');
+    setSlider('set-bg-dim', bg.dim ?? 56, '%');
+    setSlider('set-bg-blur', bg.blur ?? 0, 'px');
+    setSlider('set-bg-scale', bg.scale ?? 100, '%');
+    setSlider('set-bg-bright', bg.brightness ?? 100, '%');
+    setSlider('set-bg-contrast', bg.contrast ?? 100, '%');
+    setSlider('set-bg-sat', bg.saturate ?? 100, '%');
 
     const app = s.appearance || {};
-    setSlider('set-panel-opacity', app.panelOpacity ?? d.panelOpacity, 'set-panel-opacity-val', '%');
-    setSlider('set-card-opacity', app.cardOpacity ?? d.cardOpacity, 'set-card-opacity-val', '%');
-    setSlider('set-panel-blur', app.panelBlur ?? d.panelBlur, 'set-panel-blur-val', 'px');
-    setSlider('set-history-blur', app.historyBlur ?? d.historyBlur, 'set-history-blur-val', 'px');
-    setSlider('set-history-opacity', app.historyOpacity ?? d.historyOpacity, 'set-history-opacity-val', '%');
-    setSlider('set-settings-opacity', app.settingsOpacity ?? d.settingsOpacity, 'set-settings-opacity-val', '%');
-    setSlider('set-settings-blur', app.settingsBlur ?? d.settingsBlur, 'set-settings-blur-val', 'px');
-
-    const r = app.radius || {};
-    setSlider('set-radius-panel', r.panel ?? d.radius.panel, 'set-radius-panel-val', 'px');
-    setSlider('set-radius-card', r.card ?? d.radius.card, 'set-radius-card-val', 'px');
-    setSlider('set-radius-button', r.button ?? d.radius.button, 'set-radius-button-val', 'px');
-    setSlider('set-radius-chip', r.chip ?? d.radius.chip, 'set-radius-chip-val', 'px');
-    setSlider('set-radius-input', r.input ?? d.radius.input, 'set-radius-input-val', 'px');
-
-    const f = app.font || {};
+    for (const [id, path, suf] of SLIDERS) setSlider(id, getByPath(app, path) ?? getByPath(d, path), suf);
     const fam = $('#set-font-family');
-    if (fam) fam.value = f.family || d.font.family;
-    setSlider('set-font-size', f.size ?? d.font.size, 'set-font-size-val', 'px');
-    setSlider('set-font-weight', f.weight ?? d.font.weight, 'set-font-weight-val', '');
-    setSlider('set-line-height', f.lineHeight ?? d.font.lineHeight, 'set-line-height-val', '');
-    setSlider('set-ls', f.letterSpacing ?? d.font.letterSpacing, 'set-ls-val', 'em');
-    setSlider('set-ls-title', f.titleSpacing ?? d.font.titleSpacing, 'set-ls-title-val', 'em');
-    setSlider('set-ls-sub', f.subtitleSpacing ?? d.font.subtitleSpacing, 'set-ls-sub-val', 'em');
-
+    if (fam) fam.value = app.font?.family || d.font.family;
     chk('set-animations', app.animations !== false);
-    setSlider('set-transition-speed', app.transitionSpeed ?? d.transitionSpeed, 'set-transition-speed-val', 's');
+    chk('set-cursor-glow', app.cursorGlow !== false);
 
     const cc = (s.customColor || '#ff4fa3').toLowerCase();
     val('set-custom-color', cc);
@@ -2397,20 +3072,21 @@ async function applyEverything() {
     await applyBackground(s);
     paintTitleAndSubtitle(s);
     paintAvatar(s.avatar || '', s.title);
-    initThemeSelector(s.theme);
     engine = ENGINES[s.engine] ? s.engine : 'google';
     qHistory = await store.getHistory();
     paintEngine();
+    lastCitiesSig = '';
     initClocks(s);
     await renderCats();
     store.sig = JSON.stringify(s);
-    syncSettingsUI(s);
+    const setOv = document.getElementById('settings-overlay');
+    if (setOv && !setOv.hidden) syncSettingsUI(s);
 }
 
-let settingsBound = false;
-function bindSettings() {
-    if (settingsBound) return;
-    settingsBound = true;
+let overlaysBound = false;
+function bindOverlays() {
+    if (overlaysBound) return;
+    overlaysBound = true;
     on('settings-btn', 'click', openSettings);
 
     document.querySelectorAll('.overlay').forEach(ov => {
@@ -2418,7 +3094,7 @@ function bindSettings() {
         ov.addEventListener('keydown', e => {
             if (e.key !== 'Tab') return;
             const focusables = [...ov.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
-                .filter(el => !el.hidden && el.offsetParent !== null);
+                .filter(el => !el.closest('[hidden]'));
             if (!focusables.length) return;
             const first = focusables[0];
             const last = focusables[focusables.length - 1];
@@ -2434,60 +3110,66 @@ function bindSettings() {
     document.querySelectorAll('[data-close]').forEach(b => {
         b.addEventListener('click', () => toggleOverlay(document.getElementById(b.getAttribute('data-close')), false));
     });
+}
 
-    on('set-title', 'input', debounce(async e => {
-        const next = await updateSetting('title', e.target.value);
-        paintTitleAndSubtitle(next);
-    }, 250));
+let settingsBound = false;
+function bindSettings() {
+    if (settingsBound) return;
+    settingsBound = true;
 
-    on('set-subtitle', 'input', debounce(async e => {
-        const next = await updateSetting('subtitle', e.target.value);
-        paintTitleAndSubtitle(next);
-    }, 250));
+    const saveTitle = saveDebounced(v => updateSetting('title', v), 200);
+    on('set-title', 'input', e => {
+        const v = e.target.value;
+        paintTitleAndSubtitle({ ...(settingsCache || DEFAULT_SETTINGS), title: v });
+        saveTitle(v);
+    });
+
+    const saveSub = saveDebounced(v => updateSetting('subtitle', v), 200);
+    on('set-subtitle', 'input', e => {
+        const v = e.target.value;
+        paintTitleAndSubtitle({ ...(settingsCache || DEFAULT_SETTINGS), subtitle: v });
+        saveSub(v);
+    });
 
     on('set-smart-greeting', 'change', async e => {
         const next = await updateSetting('smartGreeting', e.target.checked);
         paintTitleAndSubtitle(next);
     });
 
-    const cityHandler = idx => debounce(async e => {
-        const next = await updateSetting('cities', prev => { const c = (prev || []).slice(); c[idx] = e.target.value; return c; });
+    const applyCity = async (idx, valStr) => {
+        const next = await updateSetting('cities', prev => { const c = (prev || []).slice(); c[idx] = valStr; return c; });
         initClocks(next);
-    }, 450);
-    on('set-city-a', 'input', cityHandler(0));
-    on('set-city-b', 'input', cityHandler(1));
+    };
+    const bindCity = (id, idx) => {
+        const deb = saveDebounced(v => applyCity(idx, v), 400);
+        on(id, 'input', e => deb(e.target.value));
+        on(id, 'change', e => { deb.cancel(); applyCity(idx, e.target.value); });
+    };
+    bindCity('set-city-a', 0);
+    bindCity('set-city-b', 1);
 
-    on('set-clock-seconds', 'change', async e => {
-        const next = await updateSetting('clockSeconds', e.target.checked);
+    on('set-clock-format', 'change', async e => initClocks(await updateSetting('clockFormat', e.target.value)));
+    on('set-clock-seconds', 'change', async e => initClocks(await updateSetting('clockSeconds', e.target.checked)));
+    on('set-clock-date', 'change', async e => initClocks(await updateSetting('clockDate', e.target.checked)));
+    on('set-hide-clocks', 'change', async e => {
+        const next = await updateSetting('hideClocks', e.target.checked);
+        applyLayoutPreferences(next);
         initClocks(next);
     });
-    on('set-clock-date', 'change', async e => {
-        const next = await updateSetting('clockDate', e.target.checked);
-        initClocks(next);
-    });
-    on('set-wx-unit', 'change', async e => {
-        const next = await updateSetting('wxUnit', e.target.value);
-        initClocks(next);
-    });
-    on('set-wx-details', 'change', async e => {
-        const next = await updateSetting('wxDetails', e.target.checked);
-        initClocks(next);
-    });
+    on('set-wx-unit', 'change', async e => initClocks(await updateSetting('wxUnit', e.target.value)));
+    on('set-wx-details', 'change', async e => initClocks(await updateSetting('wxDetails', e.target.checked)));
 
     on('set-open-newtab', 'change', e => updateSetting('openInNewTab', e.target.checked));
+    on('set-auto-focus-search', 'change', e => updateSetting('autoFocusSearch', e.target.checked));
     on('set-search-shortcuts', 'change', e => updateSetting('searchShortcuts', e.target.checked));
-    on('set-num-hotkeys', 'change', async e => {
-        await updateSetting('numHotkeys', e.target.checked);
-        renderCats(categories);
-    });
-    on('set-chip-style', 'change', async e => {
-        const next = await updateSetting('chipStyle', e.target.value);
-        applyLayoutPreferences(next);
-    });
-    on('set-hide-add-cat', 'change', async e => {
-        const next = await updateSetting('hideAddCat', e.target.checked);
-        applyLayoutPreferences(next);
-    });
+    on('set-save-history', 'change', e => updateSetting('saveSearchHistory', e.target.checked));
+    on('set-num-hotkeys', 'change', async e => { await updateSetting('numHotkeys', e.target.checked); renderCats(categories); });
+    on('set-hide-chip-names', 'change', async e => applyLayoutPreferences(await updateSetting('hideChipNames', e.target.checked)));
+    on('set-hide-avatar', 'change', async e => applyLayoutPreferences(await updateSetting('hideAvatar', e.target.checked)));
+    on('set-hide-hero-text', 'change', async e => applyLayoutPreferences(await updateSetting('hideHeroText', e.target.checked)));
+    on('set-chip-style', 'change', async e => applyLayoutPreferences(await updateSetting('chipStyle', e.target.value)));
+    on('set-cat-columns', 'change', async e => applyLayoutPreferences(await updateSetting('catColumns', e.target.value)));
+    on('set-hide-add-cat', 'change', async e => applyLayoutPreferences(await updateSetting('hideAddCat', e.target.checked)));
 
     on('set-avatar', 'change', async e => {
         const f = e.target.files[0]; if (!f) return;
@@ -2505,7 +3187,9 @@ function bindSettings() {
     });
 
     on('set-bg-type', 'change', async e => {
-        const next = await updateSetting('bg', prev => ({ ...prev, type: e.target.value }));
+        const type = e.target.value;
+        const next = await updateSetting('bg', prev => type === 'none' ? { ...prev, type, idb: '' } : { ...prev, type });
+        if (type === 'none') mediaDel(MEDIA_KEY).catch(() => {});
         await applyBackground(next);
     });
     on('set-bg-file', 'change', async e => {
@@ -2525,12 +3209,18 @@ function bindSettings() {
     });
     on('set-bg-url', 'change', async e => {
         const u = e.target.value.trim();
-        const next = await updateSetting('bg', prev => u ? { ...prev, url: u, idb: '' } : { ...prev, url: '' });
+        const next = await updateSetting('bg', prev => {
+            if (!u) return { ...prev, url: '', type: prev.idb ? prev.type : 'none' };
+            const autoType = /\.(mp4|webm|ogv|mov)(\?|#|$)/i.test(u) || /^data:video\//i.test(u) ? 'video' : 'image';
+            return { ...prev, type: prev.type === 'none' ? autoType : prev.type, url: u, idb: '' };
+        });
+        val('set-bg-type', next.bg.type);
         if (u) mediaDel(MEDIA_KEY).catch(err => console.warn('[KOCH] media del:', err));
         await applyBackground(next); toast('Фон обновлён');
     });
-    const saveBgOp = debounce(async v => {
-        await updateSetting('bg', prev => ({ ...prev, opacity: v }));
+    const saveBgOp = saveDebounced(async v => {
+        const next = await updateSetting('bg', prev => ({ ...prev, opacity: v }));
+        bgAppliedSig = JSON.stringify(next.bg || {});
     }, 120);
     on('set-bg-opacity', 'input', e => {
         const v = parseInt(e.target.value, 10);
@@ -2542,28 +3232,60 @@ function bindSettings() {
         if (img && !img.hidden) img.style.opacity = op;
         saveBgOp(v);
     });
+    const saveBgDim = saveDebounced(async v => {
+        const next = await updateSetting('bg', prev => ({ ...prev, dim: v }));
+        bgAppliedSig = JSON.stringify(next.bg || {});
+    }, 120);
+    on('set-bg-dim', 'input', e => {
+        const v = parseInt(e.target.value, 10);
+        txt('set-bg-dim-val', v + '%');
+        document.documentElement.style.setProperty('--bg-dim-op', v / 100);
+        saveBgDim(v);
+    });
+    const intVal = (id, def) => {
+        const n = parseInt(document.getElementById(id)?.value, 10);
+        return isNaN(n) ? def : n;
+    };
+    const readBgFxFromUI = () => ({
+        blur: intVal('set-bg-blur', 0),
+        scale: intVal('set-bg-scale', 100),
+        bright: intVal('set-bg-bright', 100),
+        contrast: intVal('set-bg-contrast', 100),
+        sat: intVal('set-bg-sat', 100)
+    });
+    const applyLiveBgFx = () => {
+        const { blur, scale, bright, contrast, sat } = readBgFxFromUI();
+        const st = document.documentElement.style;
+        st.setProperty('--bg-blur', blur + 'px');
+        st.setProperty('--bg-bright', bright + '%');
+        st.setProperty('--bg-contrast', contrast + '%');
+        st.setProperty('--bg-sat', sat + '%');
+        st.setProperty('--bg-bf', buildBgFilter(blur, bright, contrast, sat));
+        st.setProperty('--bg-scale', computeBgScale(scale, blur));
+        document.documentElement.classList.toggle('bg-scaled', scale > 100 || blur > 0);
+    };
+    const bindBgFxSlider = (id, key, suf) => {
+        const save = saveDebounced(async v => {
+            const next = await updateSetting('bg', prev => ({ ...prev, [key]: v }));
+            bgAppliedSig = JSON.stringify(next.bg || {});
+        }, 120);
+        on(id, 'input', e => {
+            const v = parseInt(e.target.value, 10);
+            txt(id + '-val', v + suf);
+            applyLiveBgFx();
+            save(v);
+        });
+    };
+    bindBgFxSlider('set-bg-blur', 'blur', 'px');
+    bindBgFxSlider('set-bg-scale', 'scale', '%');
+    bindBgFxSlider('set-bg-bright', 'brightness', '%');
+    bindBgFxSlider('set-bg-contrast', 'contrast', '%');
+    bindBgFxSlider('set-bg-sat', 'saturate', '%');
 
-    bindSlider('set-panel-opacity', 'panelOpacity', 'set-panel-opacity-val', '%');
-    bindSlider('set-card-opacity', 'cardOpacity', 'set-card-opacity-val', '%');
-    bindSlider('set-panel-blur', 'panelBlur', 'set-panel-blur-val', 'px');
-    bindSlider('set-history-blur', 'historyBlur', 'set-history-blur-val', 'px');
-    bindSlider('set-history-opacity', 'historyOpacity', 'set-history-opacity-val', '%');
-    bindSlider('set-settings-opacity', 'settingsOpacity', 'set-settings-opacity-val', '%');
-    bindSlider('set-settings-blur', 'settingsBlur', 'set-settings-blur-val', 'px');
-    bindSlider('set-radius-panel', 'radius.panel', 'set-radius-panel-val', 'px');
-    bindSlider('set-radius-card', 'radius.card', 'set-radius-card-val', 'px');
-    bindSlider('set-radius-button', 'radius.button', 'set-radius-button-val', 'px');
-    bindSlider('set-radius-chip', 'radius.chip', 'set-radius-chip-val', 'px');
-    bindSlider('set-radius-input', 'radius.input', 'set-radius-input-val', 'px');
+    for (const [id, path, suf, step] of SLIDERS) bindSlider(id, path, suf, step);
     on('set-font-family', 'change', e => updateAppearanceSetting('font', prev => ({ ...prev, family: e.target.value })));
-    bindSlider('set-font-size', 'font.size', 'set-font-size-val', 'px');
-    bindSlider('set-font-weight', 'font.weight', 'set-font-weight-val', '');
-    bindSlider('set-line-height', 'font.lineHeight', 'set-line-height-val', '', 0.1);
-    bindSlider('set-ls', 'font.letterSpacing', 'set-ls-val', 'em', 0.01);
-    bindSlider('set-ls-title', 'font.titleSpacing', 'set-ls-title-val', 'em', 0.01);
-    bindSlider('set-ls-sub', 'font.subtitleSpacing', 'set-ls-sub-val', 'em', 0.01);
     on('set-animations', 'change', e => updateAppearanceSetting('animations', e.target.checked));
-    bindSlider('set-transition-speed', 'transitionSpeed', 'set-transition-speed-val', 's', 0.01);
+    on('set-cursor-glow', 'change', e => updateAppearanceSetting('cursorGlow', e.target.checked));
 
     const setOv = document.getElementById('settings-overlay');
     setOv?.addEventListener('input', e => { if (e.target.type === 'range') paintRange(e.target); });
@@ -2572,14 +3294,42 @@ function bindSettings() {
             e.target.value = e.target.defaultValue;
             paintRange(e.target);
             e.target.dispatchEvent(new Event('input', { bubbles: true }));
+            const badge = document.getElementById(e.target.id + '-val');
+            const dur = animDur(200);
+            if (dur && badge) badge.animate?.([{ transform: 'scale(1.16)' }, { transform: 'none' }], { duration: dur, easing: EASE });
         }
     });
 
-    on('set-custom-color', 'input', debounce(e => {
+    let colorRaf = 0, latestHex = '';
+    const saveCustomColor = saveDebounced(hex => setCustomColor(hex), 200);
+    const previewCustomHex = hex => {
+        latestHex = hex;
+        if (!colorRaf) {
+            colorRaf = requestAnimationFrame(() => {
+                colorRaf = 0;
+                document.documentElement.dataset.theme = 'custom';
+                document.body.dataset.theme = 'custom';
+                appliedTheme = 'custom';
+                applyCustomThemeVars(latestHex);
+                const sel = $('#theme-select'); if (sel) sel.value = 'custom';
+                syncThemeSwatches('custom');
+            });
+        }
+        saveCustomColor(latestHex);
+    };
+    on('set-custom-color', 'input', e => {
         const hex = e.target.value.toLowerCase();
         val('set-custom-hex', hex);
-        setCustomColor(hex);
-    }, 80));
+        previewCustomHex(hex);
+    });
+    on('set-custom-hex', 'input', e => {
+        const raw = e.target.value.trim();
+        if (/^#?[0-9a-fA-F]{6}$/.test(raw)) {
+            const hex = (raw[0] === '#' ? raw : '#' + raw).toLowerCase();
+            val('set-custom-color', hex);
+            previewCustomHex(hex);
+        }
+    });
     on('set-custom-hex', 'change', e => {
         let hex = e.target.value.trim();
         if (/^#?[0-9a-fA-F]{3}$/.test(hex)) {
@@ -2589,6 +3339,7 @@ function bindSettings() {
         if (!/^#?[0-9a-fA-F]{6}$/.test(hex)) { toast('HEX вида #rrggbb', 'error'); return; }
         if (hex[0] !== '#') hex = '#' + hex;
         hex = hex.toLowerCase();
+        saveCustomColor.cancel();
         val('set-custom-color', hex);
         val('set-custom-hex', hex);
         setCustomColor(hex);
@@ -2597,6 +3348,7 @@ function bindSettings() {
     /* ====== ЭКСПОРТ ====== */
     on('export-btn', 'click', async () => {
         try {
+            flushPendingSaves();
             const json = await store.exportAll({ includeMedia: true });
             const blob = new Blob([json], { type: 'application/json' });
             const a = document.createElement('a');
@@ -2629,21 +3381,37 @@ function bindSettings() {
         }
     });
 
-    on('reset-btn', 'click', async () => {
-        if (confirm('Сбросить все настройки и данные?')) {
-            await store.reset();
-            location.reload();
-        }
+    on('reset-sliders-btn', 'click', async () => {
+        cancelPendingSaves();
+        const next = await store.updateSettings(s => ({
+            ...s,
+            bg: { ...DEFAULT_SETTINGS.bg, type: s.bg?.type || 'none', url: s.bg?.url || '', idb: s.bg?.idb || '' },
+            appearance: clone(DEFAULT_SETTINGS.appearance)
+        }));
+        applyAppearance(next.appearance);
+        await applyBackground(next);
+        syncSettingsUI(next);
+        toast('Параметры вида сброшены');
+    });
+
+    on('reset-btn', 'click', async e => {
+        if (!armConfirm(e.currentTarget, 'Точно сбросить?')) return;
+        await store.reset();
+        invalidateRuntimeState();
+        closeOverlays();
+        await applyEverything();
+        toast('Настройки сброшены');
     });
 }
 
-function setSlider(inputId, value, valueId, suffix) {
+function setSlider(inputId, value, suffix) {
     val(inputId, value);
-    txt(valueId, (typeof value === 'number' && value % 1 !== 0 ? value.toFixed(2) : value) + suffix);
+    txt(inputId + '-val', fmtNum(value) + suffix);
 }
 
 async function openSettings() {
-    syncSettingsUI(await store.getSettings());
+    bindSettings();
+    syncSettingsUI(settingsCache || await store.getSettings());
     toggleOverlay(document.getElementById('settings-overlay'), true, '#theme-select');
 }
 
@@ -2672,7 +3440,11 @@ function initThemeSelector(cur) {
                 role: 'radio',
                 'aria-checked': String(id === cur),
                 dataset: { swatch: id },
-                onClick: () => applyTheme(id, true)
+                onClick: e => {
+                    const dur = animDur(200);
+                    if (dur) e.currentTarget.animate?.([{ transform: 'scale(.93)' }, { transform: 'scale(1.03)' }, { transform: 'none' }], { duration: dur, easing: EASE });
+                    applyTheme(id, true);
+                }
             },
             el('span', { class: 'swatch-dot', style: { background: THEME_SWATCH_COLORS[id] || '#ff4fa3' } }),
             name)
@@ -2686,33 +3458,43 @@ let keysBound = false;
 function bindKeys() {
     if (keysBound) return;
     keysBound = true;
+    const focusSearchWithPulse = selectAll => {
+        const inp = searchInput();
+        if (!inp) return;
+        inp.focus();
+        if (selectAll) inp.select();
+        const dur = animDur(180);
+        if (dur) $('.search-bar')?.animate?.([{ transform: 'scale(1.012)' }, { transform: 'none' }], { duration: dur, easing: EASE });
+    };
     document.addEventListener('keydown', e => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
             e.preventDefault();
-            const inp = searchInput();
-            if (inp) { inp.focus(); inp.select(); }
+            closeOverlays();
+            focusSearchWithPulse(true);
             return;
         }
         if ((e.ctrlKey || e.metaKey) && e.key === ',') {
             e.preventDefault();
-            openSettings();
+            const setOv = document.getElementById('settings-overlay');
+            if (setOv && !setOv.hidden && !setOv.classList.contains('closing')) toggleOverlay(setOv, false);
+            else { closeOverlays(); openSettings(); }
             return;
         }
-        const tag = document.activeElement?.tagName;
-        const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-        const hasModal = !!document.querySelector('.overlay:not([hidden])');
+        const active = document.activeElement;
+        const tag = active?.tagName;
+        const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || active?.isContentEditable;
+        const hasModal = !!document.querySelector('.overlay:not([hidden]):not(.closing)');
         if (!inInput && !hasModal && !e.ctrlKey && !e.metaKey && !e.altKey) {
             if (e.key === '/') {
                 e.preventDefault();
-                searchInput()?.focus();
+                focusSearchWithPulse(false);
                 return;
             }
             if (settingsCache?.numHotkeys && /^[1-9]$/.test(e.key)) {
-                const idx = parseInt(e.key, 10) - 1;
-                const allChips = [...document.querySelectorAll('#cats .cat-card .chip')];
-                if (allChips[idx]) {
+                const chip = document.querySelectorAll('#cats .chip')[parseInt(e.key, 10) - 1];
+                if (chip) {
                     e.preventDefault();
-                    openChipUrl(allChips[idx], e.shiftKey);
+                    openChipUrl(chip, e.shiftKey);
                     return;
                 }
             }
@@ -2722,6 +3504,54 @@ function bindKeys() {
             hideSuggest();
         }
     });
+}
+
+let cursorGlowBound = false;
+function bindCursorGlow() {
+    if (cursorGlowBound) return;
+    cursorGlowBound = true;
+    const GLOW_SEL = '.chip, .clock-wx, .clock-card, .cat-card, .search-bar, .add-cat, .pill-btn';
+    let raf = 0, cx = 0, cy = 0;
+    let activeEl = null, activeRect = null;
+    let parentCard = null, parentRect = null;
+
+    const invalidateRects = () => { activeRect = null; parentRect = null; };
+    window.addEventListener('scroll', invalidateRects, { passive: true });
+    window.addEventListener('resize', invalidateRects, { passive: true });
+
+    document.addEventListener('pointerover', e => {
+        if (e.pointerType && e.pointerType !== 'mouse') return;
+        const hit = e.target?.closest?.(GLOW_SEL) || null;
+        if (hit !== activeEl) {
+            activeEl = hit;
+            activeRect = null;
+            parentCard = (hit && (hit.classList.contains('chip') || hit.classList.contains('clock-wx')))
+                ? hit.closest('.cat-card, .clock-card')
+                : null;
+            parentRect = null;
+        }
+    }, { passive: true });
+
+    document.addEventListener('pointermove', e => {
+        if (!activeEl || (e.pointerType && e.pointerType !== 'mouse') || !isPageActive()) return;
+        if (document.documentElement.classList.contains('no-cursor-glow')) return;
+        cx = e.clientX;
+        cy = e.clientY;
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+            raf = 0;
+            if (activeEl && activeEl.isConnected) {
+                if (!activeRect) activeRect = activeEl.getBoundingClientRect();
+                activeEl.style.setProperty('--mx', `${Math.round(cx - activeRect.left)}px`);
+                activeEl.style.setProperty('--my', `${Math.round(cy - activeRect.top)}px`);
+            }
+            if (parentCard && parentCard.isConnected) {
+                if (!parentRect) parentRect = parentCard.getBoundingClientRect();
+                parentCard.style.setProperty('--mx', `${Math.round(cx - parentRect.left)}px`);
+                parentCard.style.setProperty('--my', `${Math.round(cy - parentRect.top)}px`);
+            }
+        });
+    }, { passive: true });
 }
 
 async function boot() {
@@ -2734,15 +3564,19 @@ async function boot() {
         applyLayoutPreferences(s);
         paintTitleAndSubtitle(s);
         paintAvatar(s.avatar || '', s.title);
-        initThemeSelector(s.theme);
 
         setupVideoVisibility();
         initClocks(s);
 
         applyBackground(s);
         const searchReady = initSearch(s, history);
-        bindCatModal(); bindScModal(); bindSettings(); bindKeys();
+        bindCatModal(); bindOverlays(); bindKeys(); bindCursorGlow();
+        $('#avatar')?.addEventListener('click', e => {
+            const dur = animDur(240);
+            if (dur) e.currentTarget.animate?.([{ transform: 'scale(.92)' }, { transform: 'scale(1.06)' }, { transform: 'none' }], { duration: dur, easing: EASE });
+        });
         await Promise.all([searchReady, renderCats(cats)]);
+        if (s.autoFocusSearch) searchInput()?.focus({ preventScroll: true });
 
         const sync = debounce(async next => {
             if (!next) return;
@@ -2760,8 +3594,10 @@ async function boot() {
             syncThemeSwatches(next.theme || 'rose');
             const nextClockSig = JSON.stringify({
                 cities: next.cities || [],
+                hour12: next.clockFormat === '12h',
                 seconds: next.clockSeconds !== false,
                 date: !!next.clockDate,
+                hideClocks: !!next.hideClocks,
                 wxUnit: next.wxUnit === 'F' ? 'F' : 'C',
                 wxDetails: !!next.wxDetails
             });
