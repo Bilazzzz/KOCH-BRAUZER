@@ -501,9 +501,16 @@ function openMediaDB() {
 
 async function mediaTx(mode, run) {
     if (mode === 'readwrite') bgMediaSig = '';
-    const db = await openMediaDB();
+    let db = await openMediaDB();
+    let tx;
+    try {
+        tx = db.transaction('media', mode);
+    } catch {
+        idbPromise = null;
+        db = await openMediaDB();
+        tx = db.transaction('media', mode);
+    }
     return new Promise((resolve, reject) => {
-        const tx = db.transaction('media', mode);
         const req = run(tx.objectStore('media'));
         if (mode === 'readonly') {
             req.onsuccess = () => resolve(req.result);
@@ -529,10 +536,66 @@ function blobToBase64(blob) {
     });
 }
 
-async function base64ToBlob(dataUrl, mime) {
-    if (typeof dataUrl !== 'string' || !dataUrl.includes(',')) throw new Error('Invalid data URL');
-    const blob = await (await fetch(dataUrl)).blob();
-    return blob.slice(0, blob.size, mime || 'application/octet-stream');
+function sniffMime(bytes) {
+    if (!bytes || bytes.length < 12) return '';
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png';
+    if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg';
+    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif';
+    if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+    if (bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) return 'video/webm';
+    if (bytes[0] === 0x4F && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) return 'video/ogg';
+    if (bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) return 'video/mp4';
+    return '';
+}
+
+async function base64ToBlob(dataUrl, fallbackMime) {
+    if (dataUrl instanceof Blob) return dataUrl;
+    if (typeof dataUrl !== 'string' || !dataUrl.length) throw new Error('Invalid data URL');
+
+    let header = '';
+    let rawData = dataUrl;
+    const commaIdx = dataUrl.indexOf(',');
+    if (commaIdx !== -1 && dataUrl.slice(0, Math.min(commaIdx, 128)).startsWith('data:')) {
+        header = dataUrl.slice(0, commaIdx);
+        rawData = dataUrl.slice(commaIdx + 1);
+    } else if (dataUrl.startsWith('data:')) {
+        throw new Error('Invalid data URL');
+    }
+
+    const mimeMatch = header.match(/^data:([^;,]+)/i);
+    const headerMime = mimeMatch ? mimeMatch[1].trim() : '';
+    const isBase64 = !header || /;base64/i.test(header);
+
+    if (!isBase64) {
+        let text;
+        try { text = decodeURIComponent(rawData); } catch { text = rawData; }
+        const mime = (fallbackMime && fallbackMime !== 'application/octet-stream')
+            ? fallbackMime
+            : (headerMime || 'text/plain;charset=utf-8');
+        return new Blob([text], { type: mime });
+    }
+
+    let clean = rawData.replace(/[\r\n\s]+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    const mod = clean.length % 4;
+    if (mod === 1) throw new Error('Invalid base64 length');
+    if (mod > 0) clean += '='.repeat(4 - mod);
+
+    const chunkSize = 65536;
+    const chunks = [];
+    for (let offset = 0; offset < clean.length; offset += chunkSize) {
+        const slice = clean.slice(offset, offset + chunkSize);
+        const bin = atob(slice);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) {
+            bytes[i] = bin.charCodeAt(i);
+        }
+        chunks.push(bytes);
+    }
+
+    const validMime = m => m && m !== 'application/octet-stream' ? m : '';
+    const mime = validMime(fallbackMime) || validMime(headerMime) || sniffMime(chunks[0]) || 'application/octet-stream';
+    return new Blob(chunks, { type: mime });
 }
 
 async function compressImageBlob(blob, maxWidth = 1920) {
@@ -706,9 +769,20 @@ const store = {
 
         const bg = migrated.settings?.bg;
         if (bg) {
+            if (bg.url && bg.url.startsWith('data:') && bg.url.length > 65536) {
+                try {
+                    const blob = await base64ToBlob(bg.url);
+                    await mediaPut(MEDIA_KEY, blob);
+                    bg.url = '';
+                    bg.idb = MEDIA_KEY;
+                    if (bg.type === 'none') bg.type = blob.type.startsWith('video/') ? 'video' : 'image';
+                } catch (err) {
+                    console.warn('[KOCH] import inline bg:', err);
+                }
+            }
             if (!bg.idb) {
                 try { for (const k of await mediaKeys()) await mediaDel(k); } catch {}
-            } else if (!migrated.media.some(m => m.id === bg.idb) && !(await mediaGet(bg.idb).catch(() => null))) {
+            } else if (!(await mediaGet(bg.idb).catch(() => null))) {
                 bg.idb = '';
                 if (!bg.url) bg.type = 'none';
             }
@@ -1076,11 +1150,12 @@ function applyLayoutPreferences(s) {
 
 async function repairBgMedia(s) {
     const bg = s.bg || {};
-    if (bg.url && bg.url.startsWith('data:') && bg.url.length > 200000) {
+    if (bg.url && bg.url.startsWith('data:') && bg.url.length > 65536) {
         try {
-            const blob = await (await fetch(bg.url)).blob();
+            const blob = await base64ToBlob(bg.url);
             await mediaPut(MEDIA_KEY, blob);
-            const fixed = { ...DEFAULT_SETTINGS.bg, ...bg, url: '', idb: MEDIA_KEY };
+            const autoType = blob.type.startsWith('video/') ? 'video' : (bg.type === 'none' ? 'image' : bg.type);
+            const fixed = { ...DEFAULT_SETTINGS.bg, ...bg, type: autoType, url: '', idb: MEDIA_KEY };
             await store.updateSettings(st => ({ ...st, bg: fixed }));
             return fixed;
         } catch (err) {
@@ -3195,7 +3270,8 @@ function bindSettings() {
     on('set-bg-file', 'change', async e => {
         const f = e.target.files[0]; if (!f) return;
         try {
-            const type = f.type.indexOf('video') === 0 ? 'video' : 'image';
+            const isVideo = f.type.startsWith('video/') || /\.(mp4|webm|ogv|ogg|mov|m4v)(\?|#|$)/i.test(f.name || '');
+            const type = isVideo ? 'video' : 'image';
             const mediaBlob = type === 'image' ? await compressImageBlob(f, 2560) : f;
             await mediaPut(MEDIA_KEY, mediaBlob);
             const next = await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
@@ -3209,6 +3285,24 @@ function bindSettings() {
     });
     on('set-bg-url', 'change', async e => {
         const u = e.target.value.trim();
+        if (u.startsWith('data:') && u.length > 65536) {
+            try {
+                const blob = await base64ToBlob(u);
+                const type = blob.type.startsWith('video/') ? 'video' : 'image';
+                const mediaBlob = type === 'image' ? await compressImageBlob(blob, 2560) : blob;
+                await mediaPut(MEDIA_KEY, mediaBlob);
+                const next = await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
+                val('set-bg-type', type);
+                val('set-bg-url', '');
+                await applyBackground(next);
+                toast('Фон обновлён');
+                return;
+            } catch (err) {
+                console.warn('[KOCH] data url bg:', err);
+                toast('Не удалось прочитать data: URL', 'error');
+                return;
+            }
+        }
         const next = await updateSetting('bg', prev => {
             if (!u) return { ...prev, url: '', type: prev.idb ? prev.type : 'none' };
             const autoType = /\.(mp4|webm|ogv|mov)(\?|#|$)/i.test(u) || /^data:video\//i.test(u) ? 'video' : 'image';
@@ -3518,6 +3612,7 @@ function bindCursorGlow() {
     const invalidateRects = () => { activeRect = null; parentRect = null; };
     window.addEventListener('scroll', invalidateRects, { passive: true });
     window.addEventListener('resize', invalidateRects, { passive: true });
+    document.addEventListener('pointerleave', () => { activeEl = null; activeRect = null; parentCard = null; parentRect = null; }, { passive: true });
 
     document.addEventListener('pointerover', e => {
         if (e.pointerType && e.pointerType !== 'mouse') return;
