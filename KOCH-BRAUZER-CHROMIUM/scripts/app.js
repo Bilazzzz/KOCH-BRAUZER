@@ -101,15 +101,15 @@ function el(tag, attrs = {}, ...kids) {
     return n;
 }
 
-const debounce = (fn, ms = 250) => {
+const debounce = (fn, ms = 250, onCancel = null) => {
     let t = 0, lastArgs = null;
     const d = (...a) => { lastArgs = a; clearTimeout(t); t = setTimeout(() => { t = 0; const args = lastArgs; lastArgs = null; fn(...args); }, ms); };
-    d.cancel = () => { clearTimeout(t); t = 0; lastArgs = null; };
+    d.cancel = () => { clearTimeout(t); t = 0; lastArgs = null; onCancel?.(); };
     d.flush = () => { if (t) { const args = lastArgs; d.cancel(); fn(...args); } };
     return d;
 };
 const pendingSaves = new Set();
-const saveDebounced = (fn, ms = 200) => { const d = debounce(fn, ms); pendingSaves.add(d); return d; };
+const saveDebounced = (fn, ms = 200, onCancel = null) => { const d = debounce(fn, ms, onCancel); pendingSaves.add(d); return d; };
 const flushPendingSaves = () => pendingSaves.forEach(d => d.flush());
 const cancelPendingSaves = () => pendingSaves.forEach(d => d.cancel());
 
@@ -125,31 +125,36 @@ function toast(msg, type = 'info') {
         last._t = setTimeout(() => { last.classList.add('out'); setTimeout(() => last.remove(), 320); }, 2600);
         return;
     }
-    while (box.children.length >= 4) box.firstElementChild.remove();
+    while (box.children.length >= 4) {
+        clearTimeout(box.firstElementChild._t);
+        box.firstElementChild.remove();
+    }
     const t = el('div', { class: cls }, msg);
     box.append(t);
     t._t = setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, 2600);
 }
 
 const favCache = new Map();
-const isIconUrl = s => typeof s === 'string' && /^(https?:|data:)/i.test(s);
+const isIconUrl = s => typeof s === 'string' && s.length <= 524288 && /^(https?:\/\/|data:image\/)/i.test(s.trim());
+const isSafeMediaUrl = s => typeof s === 'string' && /^(https?:\/\/|data:(image|video)\/)/i.test(s.trim());
+const isLocalHost = h => !h || h === 'localhost' || h === '[::1]' || /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.endsWith('.local') || h.endsWith('.lan') || !h.includes('.');
 function faviconOf(url) {
     if (!url) return '';
     if (favCache.has(url)) return favCache.get(url);
+    let res = '';
     try {
         const u = new URL(/^https?:\/\//i.test(url) ? url : 'https://' + url);
-        if (!u.hostname || (!u.hostname.includes('.') && u.hostname !== 'localhost')) return '';
-        const res = `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=64`;
-        if (favCache.size >= 200) favCache.delete(favCache.keys().next().value);
-        favCache.set(url, res);
-        return res;
-    } catch { return ''; }
+        if (!isLocalHost(u.hostname)) res = `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=64`;
+    } catch {}
+    if (favCache.size >= 200) favCache.delete(favCache.keys().next().value);
+    favCache.set(url, res);
+    return res;
 }
 function faviconFallbackOf(url) {
     if (!url) return '';
     try {
         const u = new URL(/^https?:\/\//i.test(url) ? url : 'https://' + url);
-        if (!u.hostname || (!u.hostname.includes('.') && u.hostname !== 'localhost')) return '';
+        if (isLocalHost(u.hostname)) return '';
         return `https://icons.duckduckgo.com/ip3/${u.hostname}.ico`;
     } catch { return ''; }
 }
@@ -171,7 +176,10 @@ function normalizeUrl(str) {
             const u = new URL(str);
             return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname ? str : '';
         }
-        if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?([\/?#]|$)/i.test(str)) return 'http://' + str;
+        if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?([\/?#]|$)/i.test(str)) {
+            const u = new URL('http://' + str);
+            return u.hostname ? 'http://' + str : '';
+        }
         // домен вида name.tld: зона обязана начинаться с буквы (поддерживаются и IDN, например .рф)
         if (!/\s/.test(str) && /^[^\s\/?#]+\.\p{L}[\p{L}\d-]*(?::\d+)?(?:[\/?#]|$)/u.test(str)) {
             const u = new URL('https://' + str);
@@ -179,6 +187,16 @@ function normalizeUrl(str) {
         }
     } catch { return ''; }
     return '';
+}
+
+function titleFromUrl(url) {
+    try {
+        const h = new URL(url).hostname.replace(/^www\./i, '');
+        const name = h.split('.')[0] || h;
+        return name ? name.charAt(0).toUpperCase() + name.slice(1) : (url || '');
+    } catch {
+        return url || '';
+    }
 }
 
 /* ---------- 3. Цвет: HEX <-> HSL ---------- */
@@ -299,9 +317,11 @@ function animDur(ms) { return document.documentElement.classList.contains('reduc
 /* ---------- 5. Нормализация и миграция ---------- */
 function normalizeBg(bg) {
     bg = bg && typeof bg === 'object' ? bg : {};
+    const rawUrl = typeof bg.url === 'string' ? bg.url.trim() : '';
+    const safeUrl = !rawUrl ? '' : (isSafeMediaUrl(rawUrl) ? rawUrl : normalizeUrl(rawUrl));
     return {
         type: ['none', 'image', 'video'].includes(bg.type) ? bg.type : 'none',
-        url: typeof bg.url === 'string' ? bg.url : '',
+        url: safeUrl,
         idb: typeof bg.idb === 'string' ? bg.idb : '',
         opacity: num(bg.opacity, 100, 0, 100),
         dim: num(bg.dim, 56, 0, 90),
@@ -345,23 +365,23 @@ function normalizeAppearance(app) {
             card: num(r.card, d.radius.card, 0, 50),
             panel: num(r.panel, d.radius.panel, 0, 50),
             button: num(r.button, d.radius.button, 0, 50),
-            chip: num(r.chip, d.radius.chip, 0, 50),
+            chip: num(r.chip, d.radius.chip, 0, 26),
             input: num(r.input, d.radius.input, 0, 50),
             search: num(r.search, d.radius.search, 8, 50),
             avatar: num(r.avatar, d.radius.avatar, 0, 50)
         },
         font: {
             family: typeof f.family === 'string' && f.family ? f.family : d.font.family,
-            size: num(f.size, d.font.size, 10, 32),
-            weight: num(f.weight, d.font.weight, 100, 900),
-            lineHeight: num(f.lineHeight, d.font.lineHeight, 1, 3),
+            size: num(f.size, d.font.size, 12, 24),
+            weight: num(f.weight, d.font.weight, 300, 700),
+            lineHeight: num(f.lineHeight, d.font.lineHeight, 1, 2),
             letterSpacing: num(f.letterSpacing, d.font.letterSpacing, -0.05, 0.3),
             titleSpacing: num(f.titleSpacing, d.font.titleSpacing, 0, 0.6),
             subtitleSpacing: num(f.subtitleSpacing, d.font.subtitleSpacing, 0, 0.6)
         },
         animations: typeof app.animations === 'boolean' ? app.animations : true,
         cursorGlow: typeof app.cursorGlow === 'boolean' ? app.cursorGlow : true,
-        transitionSpeed: num(app.transitionSpeed, d.transitionSpeed, 0, 2)
+        transitionSpeed: num(app.transitionSpeed, d.transitionSpeed, 0, 1)
     };
 }
 
@@ -374,14 +394,19 @@ function normalizeSettings(s) {
         title: typeof s.title === 'string' ? s.title.slice(0, 40) : d.title,
         subtitle: typeof s.subtitle === 'string' ? s.subtitle.slice(0, 60) : d.subtitle,
         smartGreeting: typeof s.smartGreeting === 'boolean' ? s.smartGreeting : d.smartGreeting,
-        cities: Array.isArray(s.cities) ? [typeof s.cities[0] === 'string' ? s.cities[0] : '', typeof s.cities[1] === 'string' ? s.cities[1] : ''] : d.cities.slice(),
+        cities: Array.isArray(s.cities)
+            ? [typeof s.cities[0] === 'string' ? s.cities[0].trim().slice(0, 60) : '', typeof s.cities[1] === 'string' ? s.cities[1].trim().slice(0, 60) : '']
+            : d.cities.slice(),
         clockFormat: s.clockFormat === '12h' ? '12h' : '24h',
         clockSeconds: typeof s.clockSeconds === 'boolean' ? s.clockSeconds : d.clockSeconds,
         clockDate: typeof s.clockDate === 'boolean' ? s.clockDate : d.clockDate,
         hideClocks: typeof s.hideClocks === 'boolean' ? s.hideClocks : d.hideClocks,
         wxUnit: s.wxUnit === 'F' ? 'F' : 'C',
         wxDetails: typeof s.wxDetails === 'boolean' ? s.wxDetails : d.wxDetails,
-        avatar: typeof s.avatar === 'string' ? s.avatar : d.avatar,
+        avatar: (() => {
+            const rawAv = typeof s.avatar === 'string' ? s.avatar.trim() : '';
+            return !rawAv ? d.avatar : (isIconUrl(rawAv) ? rawAv : (normalizeUrl(rawAv) || d.avatar));
+        })(),
         engine: typeof s.engine === 'string' && ENGINES[s.engine] ? s.engine : d.engine,
         openInNewTab: typeof s.openInNewTab === 'boolean' ? s.openInNewTab : d.openInNewTab,
         autoFocusSearch: typeof s.autoFocusSearch === 'boolean' ? s.autoFocusSearch : d.autoFocusSearch,
@@ -428,19 +453,25 @@ function normalizeCategories(cats) {
     return cats.map(c => {
         if (!c || typeof c !== 'object') return null;
         const list = [c.shortcuts, c.links, c.items, c.tiles, c.sites, c.bookmarks].find(Array.isArray) || [];
+        const rawImg = str(c.image, c.img).trim();
         return {
             id: uniq(idStr(c.id), usedC),
-            icon: str(c.icon, c.emoji),
-            image: str(c.image, c.img),
-            name: str(c.name, c.title) || 'Category',
+            icon: str(c.icon, c.emoji).trim().slice(0, 16),
+            image: isIconUrl(rawImg) ? rawImg : (normalizeUrl(rawImg) || ''),
+            name: (str(c.name, c.title).trim() || 'Category').slice(0, 30),
             shortcuts: list.map(x => {
                 if (typeof x === 'string') x = { url: x, title: x };
                 if (!x || typeof x !== 'object') return null;
+                const rawUrl = str(x.url, x.href, x.link).trim();
+                const normUrl = normalizeUrl(rawUrl);
+                if (!normUrl) return null;
+                const rawTitle = str(x.title, x.name, x.label).trim();
+                const rawIcon = str(x.icon, x.image, x.favicon).trim();
                 return {
                     id: uniq(idStr(x.id), usedS),
-                    title: str(x.title, x.name, x.label),
-                    url: str(x.url, x.href, x.link),
-                    icon: str(x.icon, x.image, x.favicon)
+                    title: (rawTitle || titleFromUrl(normUrl)).slice(0, 60),
+                    url: normUrl,
+                    icon: (!rawIcon || isIconUrl(rawIcon)) ? rawIcon : (normalizeUrl(rawIcon) || (/^[a-z][a-z0-9+.-]*:/i.test(rawIcon) ? '' : rawIcon))
                 };
             }).filter(Boolean)
         };
@@ -451,10 +482,18 @@ const HISTORY_LIMIT = 50;
 
 function normalizeHistory(h) {
     if (!Array.isArray(h)) return [];
-    return h.map(x => ({
-        id: (typeof x?.id === 'string' && x.id) ? x.id : (typeof x?.id === 'number' ? String(x.id) : uid()),
-        q: typeof x?.q === 'string' ? x.q : ''
-    })).filter(x => x.q).slice(0, HISTORY_LIMIT);
+    const seen = new Set(), out = [];
+    for (const x of h) {
+        const q = typeof x?.q === 'string' ? x.q.trim().slice(0, 500) : '';
+        if (!q) continue;
+        const low = q.toLowerCase();
+        if (seen.has(low)) continue;
+        seen.add(low);
+        const id = (typeof x?.id === 'string' && x.id) ? x.id : (typeof x?.id === 'number' ? String(x.id) : uid());
+        out.push({ id, q });
+        if (out.length >= HISTORY_LIMIT) break;
+    }
+    return out;
 }
 
 /* Ключи настроек, по которым узнаётся очень старый бэкап, где настройки лежали прямо в корне файла. */
@@ -526,6 +565,20 @@ const mediaPut = (key, blob) => mediaTx('readwrite', s => s.put(blob, key));
 const mediaGet = key => mediaTx('readonly', s => s.get(key)).then(r => r || null);
 const mediaDel = key => mediaTx('readwrite', s => s.delete(key));
 const mediaKeys = () => mediaTx('readonly', s => s.getAllKeys()).then(r => r || []);
+async function mediaClearAll() {
+    try { for (const k of await mediaKeys()) await mediaDel(k); }
+    catch (err) { console.warn('[KOCH] media clear:', err); }
+}
+async function mediaPutExclusive(blob) {
+    const key = MEDIA_KEY + '-' + uid();
+    await mediaPut(key, blob);
+    try {
+        for (const k of await mediaKeys()) {
+            if (k !== key) await mediaDel(k);
+        }
+    } catch {}
+    return key;
+}
 
 function blobToBase64(blob) {
     return new Promise((resolve, reject) => {
@@ -576,7 +629,9 @@ async function base64ToBlob(dataUrl, fallbackMime) {
         return new Blob([text], { type: mime });
     }
 
-    let clean = rawData.replace(/[\r\n\s]+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    let clean = /[\r\n\s\-_]/.test(rawData)
+        ? rawData.replace(/[\r\n\s\-_]/g, ch => ch === '-' ? '+' : (ch === '_' ? '/' : ''))
+        : rawData;
     const mod = clean.length % 4;
     if (mod === 1) throw new Error('Invalid base64 length');
     if (mod > 0) clean += '='.repeat(4 - mod);
@@ -634,18 +689,78 @@ async function importMedia(list) {
 }
 
 /* ---------- Store ---------- */
+const FAST_BOOT_KEY = 'kb_fast_boot';
+const FAST_BOOT_S_KEY = 'kb_fast_s';
+const FAST_BOOT_C_KEY = 'kb_fast_c';
+const FAST_BOOT_H_KEY = 'kb_fast_h';
 const store = {
     sig: '',
     catsSig: '',
     histSig: '',
+    _webBootCache: null,
+    _saveFastBoot(s, c, h) {
+        if (!isExt) return;
+        try {
+            if (s) safeLS.set(FAST_BOOT_S_KEY, this.sig || JSON.stringify(s));
+            if (c) safeLS.set(FAST_BOOT_C_KEY, this.catsSig || JSON.stringify(c));
+            if (h) safeLS.set(FAST_BOOT_H_KEY, this.histSig || JSON.stringify(h));
+        } catch {}
+    },
+    peekBoot() {
+        try {
+            if (!isExt) {
+                const rawS = safeLS.get('kb_settings');
+                const rawC = safeLS.get('kb_categories');
+                const rawH = safeLS.get('kb_history');
+                const settings = normalizeSettings(rawS ? JSON.parse(rawS) : null);
+                const categories = rawC ? normalizeCategories(JSON.parse(rawC)) : clone(DEFAULT_CATEGORIES);
+                const history = rawH ? normalizeHistory(JSON.parse(rawH)) : [];
+                settingsCache = settings;
+                this.sig = JSON.stringify(settings);
+                this.catsSig = JSON.stringify(categories);
+                this.histSig = JSON.stringify(history);
+                const res = { settings, categories, history };
+                this._webBootCache = res;
+                return res;
+            }
+            const rawS = safeLS.get(FAST_BOOT_S_KEY);
+            const rawC = safeLS.get(FAST_BOOT_C_KEY);
+            const rawH = safeLS.get(FAST_BOOT_H_KEY);
+            if (rawS) {
+                const settings = normalizeSettings(JSON.parse(rawS));
+                const categories = rawC ? normalizeCategories(JSON.parse(rawC)) : clone(DEFAULT_CATEGORIES);
+                const history = rawH ? normalizeHistory(JSON.parse(rawH)) : [];
+                settingsCache = settings;
+                this.sig = JSON.stringify(settings);
+                this.catsSig = JSON.stringify(categories);
+                this.histSig = JSON.stringify(history);
+                return { settings, categories, history };
+            }
+            const rawLegacy = safeLS.get(FAST_BOOT_KEY);
+            if (!rawLegacy) return null;
+            const p = JSON.parse(rawLegacy);
+            if (!p || typeof p !== 'object' || !p.s) return null;
+            const settings = normalizeSettings(p.s);
+            const categories = Array.isArray(p.c) ? normalizeCategories(p.c) : clone(DEFAULT_CATEGORIES);
+            settingsCache = settings;
+            this.sig = JSON.stringify(settings);
+            this.catsSig = JSON.stringify(categories);
+            this._saveFastBoot(settings, categories);
+            safeLS.del(FAST_BOOT_KEY);
+            return { settings, categories, history: [] };
+        } catch {
+            return null;
+        }
+    },
     async _settingsFrom(data) {
         let s = data.settings;
         const ver = data.schemaVersion || 1;
         if (ver < CURRENT_SCHEMA || !s) {
             s = migrateSettings(s, ver);
-            await apiStorage.set({ settings: s, schemaVersion: CURRENT_SCHEMA });
+            apiStorage.set({ settings: s, schemaVersion: CURRENT_SCHEMA }).catch(() => {});
+        } else {
+            s = normalizeSettings(s);
         }
-        s = normalizeSettings(s);
         settingsCache = s;
         return clone(s);
     },
@@ -654,6 +769,11 @@ const store = {
         return this._settingsFrom(await apiStorage.get(['settings', 'schemaVersion']));
     },
     async boot() {
+        if (!isExt && this._webBootCache) {
+            const cached = this._webBootCache;
+            this._webBootCache = null;
+            return { settings: cached.settings, categories: cached.categories, history: cached.history };
+        }
         const d = await apiStorage.get(['settings', 'schemaVersion', 'categories', 'history']);
         const settings = await this._settingsFrom(d);
         this.sig = JSON.stringify(settings);
@@ -661,11 +781,32 @@ const store = {
         this.catsSig = JSON.stringify(categories);
         const history = Array.isArray(d.history) ? normalizeHistory(d.history) : [];
         this.histSig = JSON.stringify(history);
+        this._saveFastBoot(settings, categories, history);
         return { settings, categories, history };
+    },
+    _ownSettingsSigs: [],
+    _ownCatsSigs: [],
+    _ownHistSigs: [],
+    _recordOwnSig(list, sig) {
+        if (!isExt) return;
+        list.push(sig);
+        if (list.length > 16) list.shift();
+    },
+    _consumeOwnSig(list, sig) {
+        if (!isExt || !list.length) return false;
+        const idx = list.indexOf(sig);
+        if (idx === -1) return false;
+        list.splice(0, idx + 1);
+        return true;
     },
     async setSettings(s, inv = true) {
         if (inv) settingsCache = s;
-        this.sig = JSON.stringify(s);
+        const sig = JSON.stringify(s);
+        if (sig === this.sig) return;
+        this.sig = sig;
+        lastSettingsUISig = '';
+        this._recordOwnSig(this._ownSettingsSigs, sig);
+        this._saveFastBoot(s, null);
         await apiStorage.set({ settings: s });
     },
     _q: Promise.resolve(),
@@ -684,7 +825,11 @@ const store = {
         return Array.isArray(d.categories) ? normalizeCategories(d.categories) : clone(DEFAULT_CATEGORIES);
     },
     async setCategories(c) {
-        this.catsSig = JSON.stringify(c);
+        const sig = JSON.stringify(c);
+        if (sig === this.catsSig) return;
+        this.catsSig = sig;
+        this._recordOwnSig(this._ownCatsSigs, sig);
+        this._saveFastBoot(null, c);
         await apiStorage.set({ categories: c });
     },
     async getHistory() {
@@ -692,38 +837,57 @@ const store = {
         return Array.isArray(d.history) ? normalizeHistory(d.history) : [];
     },
     async setHistory(h) {
-        this.histSig = JSON.stringify(h);
+        const sig = JSON.stringify(h);
+        if (sig === this.histSig) return;
+        this.histSig = sig;
+        this._recordOwnSig(this._ownHistSigs, sig);
+        this._saveFastBoot(null, null, h);
         await apiStorage.set({ history: h });
     },
     onSettingsChange(cb) {
         apiStorage.onChanged((changes, area) => {
             if (area === 'local' && changes.settings) {
-                const next = changes.settings.newValue ? normalizeSettings(changes.settings.newValue) : null;
-                const sig = next ? JSON.stringify(next) : '';
-                if (sig && sig === this.sig) return;
+                const next = normalizeSettings(changes.settings.newValue);
+                const sig = JSON.stringify(next);
+                if (this._consumeOwnSig(this._ownSettingsSigs, sig) || sig === this.sig) return;
+                this.sig = sig;
                 settingsCache = next;
-                cb(next ? clone(next) : null);
+                if (isExt) safeLS.set(FAST_BOOT_S_KEY, sig);
+                cb(clone(next));
             }
         });
     },
     onCategoriesChange(cb) {
         apiStorage.onChanged((changes, area) => {
             if (area === 'local' && changes.categories) {
-                const next = Array.isArray(changes.categories.newValue) ? normalizeCategories(changes.categories.newValue) : [];
+                const next = Array.isArray(changes.categories.newValue)
+                    ? normalizeCategories(changes.categories.newValue)
+                    : clone(DEFAULT_CATEGORIES);
                 const sig = JSON.stringify(next);
-                if (sig === this.catsSig) return;
+                if (this._consumeOwnSig(this._ownCatsSigs, sig) || sig === this.catsSig) return;
                 this.catsSig = sig;
+                this._saveFastBoot(null, next);
                 cb(next);
             }
         });
     },
     async reset() {
-        settingsCache = null;
-        this.sig = '';
-        this.catsSig = '';
-        this.histSig = '';
+        const defS = normalizeSettings(null);
+        const defC = clone(DEFAULT_CATEGORIES);
+        settingsCache = defS;
+        this.sig = JSON.stringify(defS);
+        this.catsSig = JSON.stringify(defC);
+        this.histSig = '[]';
+        this._ownSettingsSigs.length = 0;
+        this._ownCatsSigs.length = 0;
+        this._ownHistSigs.length = 0;
+        this._webBootCache = null;
+        safeLS.del(FAST_BOOT_KEY);
+        safeLS.del(FAST_BOOT_S_KEY);
+        safeLS.del(FAST_BOOT_C_KEY);
+        safeLS.del(FAST_BOOT_H_KEY);
         await apiStorage.clear();
-        try { for (const k of await mediaKeys()) await mediaDel(k); } catch (err) { console.warn('[KOCH] reset media:', err); }
+        await mediaClearAll();
         wxStore.clear();
     },
 
@@ -772,17 +936,25 @@ const store = {
             if (bg.url && bg.url.startsWith('data:') && bg.url.length > 65536) {
                 try {
                     const blob = await base64ToBlob(bg.url);
-                    await mediaPut(MEDIA_KEY, blob);
+                    const isVid = blob.type.startsWith('video/');
+                    const mediaBlob = isVid ? blob : await compressImageBlob(blob, 2560);
+                    const key = await mediaPutExclusive(mediaBlob);
                     bg.url = '';
-                    bg.idb = MEDIA_KEY;
-                    if (bg.type === 'none') bg.type = blob.type.startsWith('video/') ? 'video' : 'image';
+                    bg.idb = key;
+                    if (bg.type === 'none') bg.type = isVid ? 'video' : 'image';
                 } catch (err) {
                     console.warn('[KOCH] import inline bg:', err);
+                    bg.url = '';
+                    bg.idb = '';
+                    bg.type = 'none';
                 }
             }
-            if (!bg.idb) {
-                try { for (const k of await mediaKeys()) await mediaDel(k); } catch {}
-            } else if (!(await mediaGet(bg.idb).catch(() => null))) {
+            try {
+                for (const k of await mediaKeys()) {
+                    if (k !== bg.idb) await mediaDel(k);
+                }
+            } catch {}
+            if (bg.idb && !(await mediaGet(bg.idb).catch(() => null))) {
                 bg.idb = '';
                 if (!bg.url) bg.type = 'none';
             }
@@ -790,9 +962,19 @@ const store = {
 
         const next = { schemaVersion: CURRENT_SCHEMA };
         for (const k of ['settings', 'categories', 'history']) if (migrated[k]) next[k] = migrated[k];
-        if (migrated.settings) this.sig = JSON.stringify(migrated.settings);
-        if (migrated.categories) this.catsSig = JSON.stringify(migrated.categories);
-        if (migrated.history) this.histSig = JSON.stringify(migrated.history);
+        if (migrated.settings) {
+            this.sig = JSON.stringify(migrated.settings);
+            this._recordOwnSig(this._ownSettingsSigs, this.sig);
+        }
+        if (migrated.categories) {
+            this.catsSig = JSON.stringify(migrated.categories);
+            this._recordOwnSig(this._ownCatsSigs, this.catsSig);
+        }
+        if (migrated.history) {
+            this.histSig = JSON.stringify(migrated.history);
+            this._recordOwnSig(this._ownHistSigs, this.histSig);
+        }
+        this._saveFastBoot(migrated.settings || settingsCache, migrated.categories || null, migrated.history || null);
         await apiStorage.set(next);
         settingsCache = migrated.settings ? clone(migrated.settings) : null;
         return migrated;
@@ -812,6 +994,18 @@ const THEME_SWATCH_COLORS = {
 };
 
 let appliedTheme = null, bgObjectUrl = null;
+const rootVarCache = new Map();
+function setRootVar(k, v) {
+    const sv = String(v);
+    if (rootVarCache.get(k) === sv) return;
+    rootVarCache.set(k, sv);
+    document.documentElement.style.setProperty(k, sv);
+}
+function delRootVar(k) {
+    if (!rootVarCache.has(k) && !document.documentElement.style.getPropertyValue(k)) return;
+    rootVarCache.delete(k);
+    document.documentElement.style.removeProperty(k);
+}
 
 function applyCustomThemeVars(hex) {
     const clean = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex.toLowerCase() : '#ff4fa3';
@@ -819,7 +1013,8 @@ function applyCustomThemeVars(hex) {
     const { h, s, l } = rgbToHsl(r, g, b);
     const cl = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
 
-    const S = cl(s, 30, 90);
+    const isNeutral = s < 12;
+    const S = isNeutral ? s : cl(s, 30, 90);
     const L = cl(l, 15, 85);
     const d = L / 60;
 
@@ -828,31 +1023,29 @@ function applyCustomThemeVars(hex) {
     const card    = hslHex(h, S * 0.60, cl(11 * d, 6, 26));
     const card2   = hslHex(h, S * 0.60, cl(15 * d, 9, 32));
     const accent  = clean;
-    const accent2 = hslHex(h, cl(S, 45, 92), cl(L + 16, 58, 88));
-    const yellow  = hslHex((h + 50) % 360, 78, 72);
+    const accent2 = hslHex(h, isNeutral ? s : cl(S, 45, 92), cl(L + 16, 58, 88));
+    const yellow  = isNeutral ? hslHex(h, s, 82) : hslHex((h + 50) % 360, 78, 72);
     const text    = hslHex(h, S * 0.28, 94);
     const muted   = hslHex(h, S * 0.45, cl(L * 0.75 + 22, 52, 74));
 
-    const st = document.documentElement.style;
-    st.setProperty('--bg', bg);
-    st.setProperty('--panel', rgbaOf(panel, 'var(--panel-opacity)'));
-    st.setProperty('--card', rgbaOf(card, 'var(--card-opacity)'));
-    st.setProperty('--card2', rgbaOf(card2, 'var(--card-opacity)'));
-    st.setProperty('--accent', accent);
-    st.setProperty('--accent2', accent2);
-    st.setProperty('--yellow', yellow);
-    st.setProperty('--text', text);
-    st.setProperty('--muted', muted);
-    st.setProperty('--border', rgbaOf(accent, 0.28));
-    st.setProperty('--border-hi', rgbaOf(accent, 0.55));
-    st.setProperty('--glow', rgbaOf(accent, 0.35));
+    setRootVar('--bg', bg);
+    setRootVar('--panel', rgbaOf(panel, 'var(--panel-opacity)'));
+    setRootVar('--card', rgbaOf(card, 'var(--card-opacity)'));
+    setRootVar('--card2', rgbaOf(card2, 'var(--card-opacity)'));
+    setRootVar('--accent', accent);
+    setRootVar('--accent2', accent2);
+    setRootVar('--yellow', yellow);
+    setRootVar('--text', text);
+    setRootVar('--muted', muted);
+    setRootVar('--border', rgbaOf(accent, 0.28));
+    setRootVar('--border-hi', rgbaOf(accent, 0.55));
+    setRootVar('--glow', rgbaOf(accent, 0.35));
 }
 
 function clearCustomThemeVars() {
-    const st = document.documentElement.style;
     ['--bg','--panel','--card','--card2','--accent','--accent2','--yellow',
      '--text','--muted','--border','--border-hi','--glow']
-    .forEach(k => st.removeProperty(k));
+    .forEach(delRootVar);
 }
 
 function syncThemeSwatches(activeId) {
@@ -865,8 +1058,29 @@ function syncThemeSwatches(activeId) {
     });
 }
 
+function applyThemeSync(id, customColor = '#ff4fa3') {
+    if (!THEMES[id]) id = 'rose';
+    if (id !== 'custom') cancelCustomColorPreview?.();
+    if (id === appliedTheme && id !== 'custom') return;
+    appliedTheme = id;
+    if (document.documentElement.dataset.theme !== id) document.documentElement.dataset.theme = id;
+    if (document.body.dataset.theme !== id) document.body.dataset.theme = id;
+    syncThemeSwatches(id);
+    const sel = $('#theme-select');
+    if (sel && sel.value !== id) sel.value = id;
+    if (id === 'custom') applyCustomThemeVars(customColor || '#ff4fa3');
+    else clearCustomThemeVars();
+}
+
+let cancelCustomColorPreview = null;
+
 async function applyTheme(id, persist = true, preloadedCustomColor = null) {
     if (!THEMES[id]) id = 'rose';
+    if (persist && id !== 'custom') cancelCustomColorPreview?.();
+    if (!persist && (id !== 'custom' || preloadedCustomColor)) {
+        applyThemeSync(id, preloadedCustomColor);
+        return;
+    }
     if (id === appliedTheme && id !== 'custom' && !persist) return;
     appliedTheme = id;
     document.documentElement.dataset.theme = id;
@@ -889,52 +1103,52 @@ function applyAppearance(app) {
     if (!app) return;
     const d = DEFAULT_SETTINGS.appearance;
     const r = document.documentElement;
-    r.style.setProperty('--panel-opacity', (app.panelOpacity ?? d.panelOpacity) / 100);
-    r.style.setProperty('--card-opacity', (app.cardOpacity ?? d.cardOpacity) / 100);
+    setRootVar('--panel-opacity', (app.panelOpacity ?? d.panelOpacity) / 100);
+    setRootVar('--card-opacity', (app.cardOpacity ?? d.cardOpacity) / 100);
     const pb = app.panelBlur ?? d.panelBlur;
-    r.style.setProperty('--panel-blur', pb + 'px');
-    r.style.setProperty('--panel-bf', pb > 0 ? `blur(${pb}px)` : 'none');
+    setRootVar('--panel-blur', pb + 'px');
+    setRootVar('--panel-bf', pb > 0 ? `blur(${pb}px)` : 'none');
     r.classList.toggle('no-blur', pb <= 0);
     const hb = app.historyBlur ?? d.historyBlur;
-    r.style.setProperty('--sg-bf', hb > 0 ? `blur(${hb}px)` : 'none');
-    r.style.setProperty('--sg-op', (app.historyOpacity ?? d.historyOpacity) + '%');
-    r.style.setProperty('--set-op', (app.settingsOpacity ?? d.settingsOpacity) + '%');
+    setRootVar('--sg-bf', hb > 0 ? `blur(${hb}px)` : 'none');
+    setRootVar('--sg-op', (app.historyOpacity ?? d.historyOpacity) + '%');
+    setRootVar('--set-op', (app.settingsOpacity ?? d.settingsOpacity) + '%');
     const sb = app.settingsBlur ?? d.settingsBlur;
-    r.style.setProperty('--set-bf', sb > 0 ? `blur(${sb}px)` : 'none');
-    r.style.setProperty('--panel-width', (app.panelWidth ?? d.panelWidth) + 'px');
-    r.style.setProperty('--panel-pad', (app.panelPad ?? d.panelPad) + 'px');
-    r.style.setProperty('--panel-mt', (app.panelMargin ?? d.panelMargin) + 'px');
-    r.style.setProperty('--card-pad', (app.cardPad ?? d.cardPad) + 'px');
-    r.style.setProperty('--grid-gap', (app.gridGap ?? d.gridGap) + 'px');
-    r.style.setProperty('--chip-gap', (app.chipGap ?? d.chipGap) + 'px');
-    r.style.setProperty('--chip-min', (app.chipMin ?? d.chipMin) + 'px');
-    r.style.setProperty('--search-width', (app.searchWidth ?? d.searchWidth) + '%');
-    r.style.setProperty('--search-height', (app.searchHeight ?? d.searchHeight) + 'px');
-    r.style.setProperty('--avatar-size', (app.avatarSize ?? d.avatarSize) + 'px');
-    r.style.setProperty('--chip-ico-size', (app.iconSize ?? d.iconSize) + 'px');
-    r.style.setProperty('--title-size', (app.titleSize ?? d.titleSize) + 'px');
-    r.style.setProperty('--sub-size', (app.subSize ?? d.subSize) + 'px');
-    r.style.setProperty('--clock-size', (app.clockSize ?? d.clockSize) + 'px');
-    r.style.setProperty('--chip-font', (app.chipFont ?? d.chipFont) + 'px');
+    setRootVar('--set-bf', sb > 0 ? `blur(${sb}px)` : 'none');
+    setRootVar('--panel-width', (app.panelWidth ?? d.panelWidth) + 'px');
+    setRootVar('--panel-pad', (app.panelPad ?? d.panelPad) + 'px');
+    setRootVar('--panel-mt', (app.panelMargin ?? d.panelMargin) + 'px');
+    setRootVar('--card-pad', (app.cardPad ?? d.cardPad) + 'px');
+    setRootVar('--grid-gap', (app.gridGap ?? d.gridGap) + 'px');
+    setRootVar('--chip-gap', (app.chipGap ?? d.chipGap) + 'px');
+    setRootVar('--chip-min', (app.chipMin ?? d.chipMin) + 'px');
+    setRootVar('--search-width', (app.searchWidth ?? d.searchWidth) + '%');
+    setRootVar('--search-height', (app.searchHeight ?? d.searchHeight) + 'px');
+    setRootVar('--avatar-size', (app.avatarSize ?? d.avatarSize) + 'px');
+    setRootVar('--chip-ico-size', (app.iconSize ?? d.iconSize) + 'px');
+    setRootVar('--title-size', (app.titleSize ?? d.titleSize) + 'px');
+    setRootVar('--sub-size', (app.subSize ?? d.subSize) + 'px');
+    setRootVar('--clock-size', (app.clockSize ?? d.clockSize) + 'px');
+    setRootVar('--chip-font', (app.chipFont ?? d.chipFont) + 'px');
     if (app.radius) {
-        r.style.setProperty('--radius-card', (app.radius.card ?? d.radius.card) + 'px');
-        r.style.setProperty('--radius-panel', (app.radius.panel ?? d.radius.panel) + 'px');
-        r.style.setProperty('--radius-button', (app.radius.button ?? d.radius.button) + 'px');
-        r.style.setProperty('--radius-chip', (app.radius.chip ?? d.radius.chip) + 'px');
-        r.style.setProperty('--radius-input', (app.radius.input ?? d.radius.input) + 'px');
-        r.style.setProperty('--radius-search', (app.radius.search ?? d.radius.search) + 'px');
-        r.style.setProperty('--radius-avatar', (app.radius.avatar ?? d.radius.avatar) + '%');
+        setRootVar('--radius-card', (app.radius.card ?? d.radius.card) + 'px');
+        setRootVar('--radius-panel', (app.radius.panel ?? d.radius.panel) + 'px');
+        setRootVar('--radius-button', (app.radius.button ?? d.radius.button) + 'px');
+        setRootVar('--radius-chip', (app.radius.chip ?? d.radius.chip) + 'px');
+        setRootVar('--radius-input', (app.radius.input ?? d.radius.input) + 'px');
+        setRootVar('--radius-search', (app.radius.search ?? d.radius.search) + 'px');
+        setRootVar('--radius-avatar', (app.radius.avatar ?? d.radius.avatar) + '%');
     }
     if (app.font) {
-        r.style.setProperty('--font-family', app.font.family || d.font.family);
-        r.style.setProperty('--font-size', (app.font.size ?? d.font.size) + 'px');
-        r.style.setProperty('--font-weight', app.font.weight ?? d.font.weight);
-        r.style.setProperty('--line-height', app.font.lineHeight ?? d.font.lineHeight);
-        r.style.setProperty('--ls', (app.font.letterSpacing ?? d.font.letterSpacing) + 'em');
-        r.style.setProperty('--ls-title', (app.font.titleSpacing ?? d.font.titleSpacing) + 'em');
-        r.style.setProperty('--ls-sub', (app.font.subtitleSpacing ?? d.font.subtitleSpacing) + 'em');
+        setRootVar('--font-family', app.font.family || d.font.family);
+        setRootVar('--font-size', (app.font.size ?? d.font.size) + 'px');
+        setRootVar('--font-weight', app.font.weight ?? d.font.weight);
+        setRootVar('--line-height', app.font.lineHeight ?? d.font.lineHeight);
+        setRootVar('--ls', (app.font.letterSpacing ?? d.font.letterSpacing) + 'em');
+        setRootVar('--ls-title', (app.font.titleSpacing ?? d.font.titleSpacing) + 'em');
+        setRootVar('--ls-sub', (app.font.subtitleSpacing ?? d.font.subtitleSpacing) + 'em');
     }
-    r.style.setProperty('--transition-speed', (app.transitionSpeed ?? d.transitionSpeed) + 's');
+    setRootVar('--transition-speed', (app.transitionSpeed ?? d.transitionSpeed) + 's');
     r.classList.toggle('reduce-motion', app.animations === false);
     r.classList.toggle('no-cursor-glow', app.cursorGlow === false);
 }
@@ -951,6 +1165,7 @@ function buildBgFilter(blur = 0, bright = 100, contrast = 100, sat = 100) {
 
 /* ---------- 7.1. Фон и управление видеодекодером ---------- */
 let bgChain = Promise.resolve();
+let bgInFlight = 0;
 let bgMediaSig = '';
 let bgVideoActive = false;
 let bgVideoUrl = '';
@@ -961,7 +1176,17 @@ let videoReleaseTimer = 0;
 const isPageActive = () => !document.hidden && !pageGone;
 
 function applyBackground(preloaded) {
-    const run = bgChain.then(() => applyBackgroundNow(preloaded));
+    if (!bgInFlight && preloaded && !(preloaded.bg?.type !== 'none' && preloaded.bg?.idb)) {
+        const bg = preloaded.bg || { type: 'none', url: '', idb: '' };
+        bgAppliedSig = JSON.stringify(bg);
+        const url = bg.type !== 'none' ? (bg.url || '') : '';
+        bgMediaSig = url ? 'url:' + url : '';
+        if (bgObjectUrl) { URL.revokeObjectURL(bgObjectUrl); bgObjectUrl = null; }
+        applyBackgroundDom(bg, url);
+        return Promise.resolve();
+    }
+    bgInFlight++;
+    const run = bgChain.then(() => applyBackgroundNow(preloaded)).finally(() => { bgInFlight--; });
     bgChain = run.catch(err => console.warn('[KOCH] background:', err));
     return run;
 }
@@ -969,6 +1194,7 @@ function applyBackground(preloaded) {
 function releaseVideo(v) {
     clearTimeout(videoReleaseTimer);
     videoReleaseTimer = 0;
+    v.onerror = null;
     try { v.pause(); } catch {}
     if (v.hasAttribute('src')) {
         v.removeAttribute('src');
@@ -1001,15 +1227,73 @@ function syncVideoPlayback() {
     }
 }
 
-async function applyBackgroundNow(preloaded) {
-    const s = preloaded || await store.getSettings();
-    const bg = s.bg || { type: 'none', url: '', idb: '' };
-    bgAppliedSig = JSON.stringify(bg);
+function applyBackgroundDom(bg, url) {
     const v = document.getElementById('bg-video');
     const i = document.getElementById('bg-image');
     if (!v || !i) return;
 
     const root = document.documentElement;
+    const op = (bg.opacity ?? 100) / 100;
+    const dimOp = (bg.dim ?? 56) / 100;
+    const bgBlur = bg.blur ?? 0;
+    const bgScale = bg.scale ?? 100;
+    const bgBright = bg.brightness ?? 100;
+    const bgContrast = bg.contrast ?? 100;
+    const bgSat = bg.saturate ?? 100;
+    setRootVar('--bg-opacity', op);
+    setRootVar('--bg-dim-op', dimOp);
+    setRootVar('--bg-blur', bgBlur + 'px');
+    setRootVar('--bg-bright', bgBright + '%');
+    setRootVar('--bg-contrast', bgContrast + '%');
+    setRootVar('--bg-sat', bgSat + '%');
+    setRootVar('--bg-bf', buildBgFilter(bgBlur, bgBright, bgContrast, bgSat));
+    setRootVar('--bg-scale', computeBgScale(bgScale, bgBlur));
+    root.classList.toggle('bg-scaled', bgScale > 100 || bgBlur > 0);
+
+    const hasMedia = (bg.type === 'video' || bg.type === 'image') && url;
+    root.classList.toggle('no-bg', !hasMedia);
+    if (bg.type === 'video' && url) {
+        i.hidden = true; v.hidden = false; i.style.backgroundImage = ''; i.dataset.kbUrl = '';
+        v.style.opacity = op;
+        v.onerror = () => {
+            bgVideoActive = false; bgVideoUrl = '';
+            releaseVideo(v); v.hidden = true; root.classList.add('no-bg');
+        };
+        bgVideoActive = true;
+        bgVideoUrl = url;
+    } else if (bg.type === 'image' && url) {
+        bgVideoActive = false; bgVideoUrl = '';
+        releaseVideo(v);
+        v.hidden = true; i.hidden = false;
+        const safeUrl = `url("${String(url).replace(/[\\"\n\r]/g, '\\$&')}")`;
+        if (i.style.backgroundImage !== safeUrl) i.style.backgroundImage = safeUrl;
+        i.style.opacity = op;
+        if (i.dataset.kbUrl !== url) {
+            i.dataset.kbUrl = url;
+            const probe = new Image();
+            probe.onerror = () => {
+                if (i.dataset.kbUrl === url && !i.hidden) {
+                    i.dataset.kbUrl = '';
+                    i.hidden = true;
+                    i.style.backgroundImage = '';
+                    root.classList.add('no-bg');
+                }
+            };
+            probe.src = url;
+        }
+    } else {
+        bgVideoActive = false; bgVideoUrl = '';
+        releaseVideo(v);
+        v.hidden = true;
+        i.hidden = true; i.style.backgroundImage = ''; i.dataset.kbUrl = '';
+    }
+    syncVideoPlayback();
+}
+
+async function applyBackgroundNow(preloaded) {
+    const s = preloaded || await store.getSettings();
+    const bg = s.bg || { type: 'none', url: '', idb: '' };
+    bgAppliedSig = JSON.stringify(bg);
     let url = (bg.type !== 'none') ? (bg.url || '') : '';
     let sig = url ? 'url:' + url : '';
     if (bg.type !== 'none' && bg.idb) {
@@ -1028,55 +1312,7 @@ async function applyBackgroundNow(preloaded) {
     bgMediaSig = sig;
     if (bgObjectUrl && bgObjectUrl !== url) URL.revokeObjectURL(bgObjectUrl);
     bgObjectUrl = (url && url.startsWith('blob:')) ? url : null;
-
-    const op = (bg.opacity ?? 100) / 100;
-    const dimOp = (bg.dim ?? 56) / 100;
-    const bgBlur = bg.blur ?? 0;
-    const bgScale = bg.scale ?? 100;
-    const bgBright = bg.brightness ?? 100;
-    const bgContrast = bg.contrast ?? 100;
-    const bgSat = bg.saturate ?? 100;
-    const st = root.style;
-    st.setProperty('--bg-opacity', op);
-    st.setProperty('--bg-dim-op', dimOp);
-    st.setProperty('--bg-blur', bgBlur + 'px');
-    st.setProperty('--bg-bright', bgBright + '%');
-    st.setProperty('--bg-contrast', bgContrast + '%');
-    st.setProperty('--bg-sat', bgSat + '%');
-    st.setProperty('--bg-bf', buildBgFilter(bgBlur, bgBright, bgContrast, bgSat));
-    st.setProperty('--bg-scale', computeBgScale(bgScale, bgBlur));
-    root.classList.toggle('bg-scaled', bgScale > 100 || bgBlur > 0);
-
-    const hasMedia = (bg.type === 'video' || bg.type === 'image') && url;
-    root.classList.toggle('no-bg', !hasMedia);
-    if (bg.type === 'video' && url) {
-        i.hidden = true; v.hidden = false; i.style.backgroundImage = '';
-        document.documentElement.style.removeProperty('--bg-img');
-        document.documentElement.classList.remove('img-bg');
-        v.style.opacity = op;
-        v.onerror = () => {
-            bgVideoActive = false; bgVideoUrl = '';
-            releaseVideo(v); v.hidden = true; root.classList.add('no-bg');
-        };
-        bgVideoActive = true;
-        bgVideoUrl = url;
-    } else if (bg.type === 'image' && url) {
-        bgVideoActive = false; bgVideoUrl = '';
-        releaseVideo(v);
-        v.hidden = true; i.hidden = false;
-        const safeUrl = `url("${String(url).replace(/[\\"\n\r]/g, '\\$&')}")`;
-        i.style.backgroundImage = safeUrl; i.style.opacity = op;
-        document.documentElement.style.setProperty('--bg-img', safeUrl);
-        document.documentElement.classList.add('img-bg');
-    } else {
-        bgVideoActive = false; bgVideoUrl = '';
-        releaseVideo(v);
-        v.hidden = true;
-        i.hidden = true; i.style.backgroundImage = '';
-        document.documentElement.style.removeProperty('--bg-img');
-        document.documentElement.classList.remove('img-bg');
-    }
-    syncVideoPlayback();
+    applyBackgroundDom(bg, url);
 }
 
 let videoVisibilityBound = false;
@@ -1114,13 +1350,14 @@ function paintTitleAndSubtitle(s) {
     if (t && t.textContent !== raw) t.textContent = raw;
     if (document.title !== raw) document.title = raw;
     const fb = document.getElementById('avatar-fallback');
-    if (fb && !fb.hidden) {
+    if (fb) {
         const ch = (raw[0] || 'K').toUpperCase();
         if (fb.textContent !== ch) fb.textContent = ch;
     }
     const sub = document.getElementById('subtitle');
     if (sub) {
         const baseSub = (s.subtitle ?? '').trim();
+        if (s.smartGreeting) lastGreetHour = new Date().getHours();
         const nextSub = s.smartGreeting ? (baseSub ? `${getSmartGreeting()} • ${baseSub}` : getSmartGreeting()) : baseSub;
         if (sub.textContent !== nextSub) sub.textContent = nextSub;
     }
@@ -1153,14 +1390,16 @@ async function repairBgMedia(s) {
     if (bg.url && bg.url.startsWith('data:') && bg.url.length > 65536) {
         try {
             const blob = await base64ToBlob(bg.url);
-            await mediaPut(MEDIA_KEY, blob);
-            const autoType = blob.type.startsWith('video/') ? 'video' : (bg.type === 'none' ? 'image' : bg.type);
-            const fixed = { ...DEFAULT_SETTINGS.bg, ...bg, type: autoType, url: '', idb: MEDIA_KEY };
+            const isVid = blob.type.startsWith('video/');
+            const mediaBlob = isVid ? blob : await compressImageBlob(blob, 2560);
+            const key = await mediaPutExclusive(mediaBlob);
+            const autoType = isVid ? 'video' : (bg.type === 'none' ? 'image' : bg.type);
+            const fixed = { ...DEFAULT_SETTINGS.bg, ...bg, type: autoType, url: '', idb: key };
             await store.updateSettings(st => ({ ...st, bg: fixed }));
             return fixed;
         } catch (err) {
             console.warn('[KOCH] bg repair failed:', err);
-            const fixed = { ...DEFAULT_SETTINGS.bg, ...bg, url: '', idb: '' };
+            const fixed = { ...DEFAULT_SETTINGS.bg, ...bg, type: 'none', url: '', idb: '' };
             await store.updateSettings(st => ({ ...st, bg: fixed }));
             return fixed;
         }
@@ -1213,14 +1452,18 @@ const wxStore = (() => {
         wx: k => load().wx[k] || null,
         setGeo(c, v) {
             const g = load().geo;
-            const keys = Object.keys(g);
-            if (keys.length >= 40) delete g[keys[0]];
+            if (!(c in g)) {
+                const keys = Object.keys(g);
+                if (keys.length >= 40) delete g[keys[0]];
+            }
             g[c] = v; save();
         },
         setWx(k, v) {
             const w = load().wx;
-            const keys = Object.keys(w);
-            if (keys.length >= 40) delete w[keys[0]];
+            if (!(k in w)) {
+                const keys = Object.keys(w);
+                if (keys.length >= 40) delete w[keys[0]];
+            }
             w[k] = v; save();
         },
         clear() {
@@ -1269,6 +1512,11 @@ function wxEmoji(code) {
 
 function applyWxNode(elNode, w, statusHint = '') {
     if (!elNode) return;
+    const sig = w
+        ? `${w.t}|${w.code}|${w.feels ?? ''}|${w.wind ?? ''}|${w.at ?? ''}|${clockOpts.wxUnit}|${clockOpts.wxDetails ? 1 : 0}`
+        : `null|${statusHint}`;
+    if (elNode._wxSig === sig) return;
+    elNode._wxSig = sig;
     const wasPlaceholder = elNode.textContent === '—';
     if (!w) {
         elNode.textContent = '—';
@@ -1341,20 +1589,28 @@ async function geocode(city) {
     return req;
 }
 
+const wxPending = new Map();
 async function weather(lat, lon, force = false) {
     const key = lat + ',' + lon, c = wxStore.wx(key);
     if (!force && c && Date.now() - c.at < WX_FRESH && c.feels !== undefined) return c;
-    const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&wind_speed_unit=ms&timezone=auto`);
-    if (d?.current?.temperature_2m == null) throw new Error('Weather data unavailable');
-    const w = {
-        t: Math.round(d.current.temperature_2m),
-        feels: d.current.apparent_temperature != null ? Math.round(d.current.apparent_temperature) : null,
-        wind: d.current.wind_speed_10m != null ? Math.round(d.current.wind_speed_10m * 10) / 10 : null,
-        code: d.current.weather_code ?? 0,
-        at: Date.now()
-    };
-    wxStore.setWx(key, w);
-    return w;
+    if (wxPending.has(key)) return wxPending.get(key);
+    const req = (async () => {
+        try {
+            const d = await fetchJson(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&wind_speed_unit=ms&timezone=auto`);
+            if (d?.current?.temperature_2m == null) throw new Error('Weather data unavailable');
+            const w = {
+                t: Math.round(d.current.temperature_2m),
+                feels: d.current.apparent_temperature != null ? Math.round(d.current.apparent_temperature) : null,
+                wind: d.current.wind_speed_10m != null ? Math.round(d.current.wind_speed_10m * 10) / 10 : null,
+                code: d.current.weather_code ?? 0,
+                at: Date.now()
+            };
+            wxStore.setWx(key, w);
+            return w;
+        } finally { wxPending.delete(key); }
+    })();
+    wxPending.set(key, req);
+    return req;
 }
 
 const FMT_SEC = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
@@ -1373,8 +1629,6 @@ function tick() {
         }
     }
     if (clockOpts.hideClocks) return;
-    const fmtBase = clockOpts.seconds ? FMT_SEC : FMT_MIN;
-    const fmtOpts = clockOpts.hour12 ? { ...fmtBase, hour: 'numeric', hour12: true } : { ...fmtBase, hour12: false };
     const locale = clockOpts.hour12 ? 'en-US' : 'ru-RU';
     for (let i = 0; i < clockSlots.length; i++) {
         const s = clockSlots[i];
@@ -1384,6 +1638,8 @@ function tick() {
         let text;
         try {
             if (!s.fmt) {
+                const fmtBase = clockOpts.seconds ? FMT_SEC : FMT_MIN;
+                const fmtOpts = clockOpts.hour12 ? { ...fmtBase, hour: 'numeric', hour12: true } : { ...fmtBase, hour12: false };
                 try {
                     s.fmt = new Intl.DateTimeFormat(locale, { ...fmtOpts, timeZone: s.tz || undefined });
                 } catch {
@@ -1394,13 +1650,15 @@ function tick() {
             text = s.fmt.format(now);
         } catch {
             s.fmt = null;
-            text = now.toLocaleTimeString(locale, fmtOpts);
+            const fmtBase = clockOpts.seconds ? FMT_SEC : FMT_MIN;
+            text = now.toLocaleTimeString(locale, clockOpts.hour12 ? { ...fmtBase, hour: 'numeric', hour12: true } : { ...fmtBase, hour12: false });
         }
         if (elT.textContent !== text) elT.textContent = text;
 
         const elD = s.dateEl || (s.dateEl = $(i === 0 ? '#date-a' : '#date-b'));
         if (elD) {
-            elD.hidden = !clockOpts.date;
+            const hideD = !clockOpts.date;
+            if (elD.hidden !== hideD) elD.hidden = hideD;
             if (clockOpts.date && s.lastDateMin !== curMin) {
                 s.lastDateMin = curMin;
                 try {
@@ -1463,7 +1721,13 @@ async function refreshWeather(force = false) {
     else { wxRetryN = 0; lastWxAt = Date.now(); }
     return !failed;
 }
-window.addEventListener('online', () => { wxRetryN = 0; if (clocksReady && isPageActive()) refreshWeather(); });
+window.addEventListener('online', () => {
+    wxRetryN = 0;
+    if (clocksReady && isPageActive()) refreshWeather();
+    if (settingsCache?.bg?.type !== 'none' && settingsCache?.bg?.url && document.documentElement.classList.contains('no-bg')) {
+        applyBackground(settingsCache);
+    }
+});
 
 function scheduleNextTick() {
     if (tickTimer) clearTimeout(tickTimer);
@@ -1498,17 +1762,30 @@ function syncClockTimers() {
     else if (!tickTimer) startClockTimers();
 }
 
-let wxClickBound = false;
+let wxClickBound = false, wxManualBusy = false;
 function bindWxRefreshClick() {
     if (wxClickBound) return;
     wxClickBound = true;
-    document.querySelector('.clocks')?.addEventListener('click', async e => {
+    const clocksEl = document.querySelector('.clocks');
+    const triggerWxRefresh = async wxNode => {
+        if (!wxNode || wxManualBusy) return;
+        const slot = clockSlots[wxNode.id === 'wx-b' ? 1 : 0];
+        if (!slot || slot.hidden || !slot.city || slot.city === '—') return;
+        wxManualBusy = true;
+        try {
+            const dur = animDur(200);
+            if (dur) wxNode.animate?.([{ transform: 'scale(.95)' }, { transform: 'none' }], { duration: dur, easing: EASE });
+            const ok = await refreshWeather(true);
+            toast(ok ? 'Погода обновлена' : 'Не удалось обновить погоду', ok ? 'info' : 'error');
+        } finally {
+            wxManualBusy = false;
+        }
+    };
+    clocksEl?.addEventListener('click', e => triggerWxRefresh(e.target.closest('.clock-wx')));
+    clocksEl?.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
         const wxNode = e.target.closest('.clock-wx');
-        if (!wxNode) return;
-        const dur = animDur(200);
-        if (dur) wxNode.animate?.([{ transform: 'scale(.95)' }, { transform: 'none' }], { duration: dur, easing: EASE });
-        const ok = await refreshWeather(true);
-        toast(ok ? 'Погода обновлена' : 'Не удалось обновить погоду', ok ? 'info' : 'error');
+        if (wxNode) { e.preventDefault(); triggerWxRefresh(wxNode); }
     });
 }
 
@@ -1543,8 +1820,8 @@ async function initClocks(preloaded) {
             stopClockTimers();
             if (isPageActive() && s.smartGreeting) scheduleNextTick();
         } else if (wasHidden && isPageActive()) {
+            lastWxAt = 0;
             startClockTimers();
-            refreshWeather();
         } else {
             tick();
             if (isPageActive()) scheduleNextTick();
@@ -1650,7 +1927,6 @@ const ICO_X = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" strok
 const ICO_FILL = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7L7 17M7 9v8h8"/></svg>';
 const ICO_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>';
 const ICO_LINK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
-let sugSel = -1;
 
 function parseBangQuery(raw) {
     const m = raw.trim().match(/^(!\S+)(?:\s+(.*))?$/);
@@ -1698,12 +1974,18 @@ function syncSearchClearBtn() {
     if (kbd) kbd.hidden = hasVal;
 }
 
+let sugSel = -1, lastSuggestSig = '';
+
 function renderSuggest() {
     const box = suggestBox(), ul = suggestList(), inp = searchInput();
     if (!box || !ul || !inp) return;
     syncSearchClearBtn();
+    const hasTrailingSpace = /\s$/.test(inp.value);
     const raw = inp.value.trim(), q = raw.toLowerCase();
     const s = settingsCache || DEFAULT_SETTINGS;
+    const nextSig = `${raw}\n${hasTrailingSpace ? 1 : 0}\n${s.searchShortcuts !== false ? (store.catsSig || categories.length) : '0'}\n${qHistory.map(h => h.id).join(',')}\n${Math.floor(Date.now() / 60000)}`;
+    if (sugSel === -1 && !box.hidden && !box.classList.contains('closing') && nextSig === lastSuggestSig) return;
+    lastSuggestSig = nextSig;
     sugSel = -1;
     const rows = [];
 
@@ -1712,15 +1994,17 @@ function renderSuggest() {
         const matchedSc = [];
         for (const cat of categories) {
             for (const sc of cat.shortcuts || []) {
-                const t = (sc.title || '').toLowerCase(), u = (sc.url || '').toLowerCase();
-                if (t.includes(q) || u.includes(q)) {
-                    matchedSc.push({ sc, catId: cat.id, catName: cat.name });
-                    if (matchedSc.length >= 4) break;
+                const t = (sc.title || '').toLowerCase();
+                const u = (sc.url || '').toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/\/+$/, '');
+                const tIdx = t.indexOf(q), uIdx = u.indexOf(q);
+                if (tIdx !== -1 || uIdx !== -1) {
+                    const rank = tIdx === 0 ? 0 : (uIdx === 0 ? 1 : (tIdx !== -1 ? 2 : 3));
+                    matchedSc.push({ sc, catId: cat.id, catName: cat.name, rank });
                 }
             }
-            if (matchedSc.length >= 4) break;
         }
-        matchedSc.forEach(({ sc, catId, catName }, idx) => {
+        matchedSc.sort((a, b) => a.rank - b.rank);
+        matchedSc.slice(0, 4).forEach(({ sc, catId, catName }, idx) => {
             const fav = isIconUrl(sc.icon) ? sc.icon : faviconOf(sc.url);
             const icoWrap = fav
                 ? el('span', { class: 'ico' }, el('img', { src: fav, alt: '', onerror: e => onFavError(e, sc.url, () => document.createTextNode('🌐')) }))
@@ -1740,12 +2024,12 @@ function renderSuggest() {
     }
 
     const bangInfo = raw ? parseBangQuery(raw) : null;
-    const isBangPrefix = raw.startsWith('!') && !raw.includes(' ');
+    const isBangPrefix = raw.startsWith('!') && !raw.includes(' ') && !(bangInfo && hasTrailingSpace);
     let matchedBangs = [];
     if (isBangPrefix) {
         matchedBangs = Object.entries(SEARCH_BANGS)
             .filter(([k, v]) => (!v.alias || q === k) && k.startsWith(q))
-            .slice(0, 7);
+            .slice(0, 16);
         matchedBangs.forEach(([k, v], idx) => {
             rows.push(el('li', {
                 id: 'sg-opt-bang-' + idx,
@@ -1761,7 +2045,7 @@ function renderSuggest() {
     }
 
     const directUrl = (raw && !bangInfo && !isBangPrefix) ? normalizeUrl(raw) : '';
-    const isDirectUrl = !!(directUrl && (/^https?:\/\//i.test(raw) || !raw.includes(' ')));
+    const isDirectUrl = Boolean(directUrl);
     const items = qHistory.filter(h => !q || h.q.toLowerCase().includes(q)).slice(0, 8);
     if (raw && (!isBangPrefix || matchedBangs.length === 0) && !items.some(h => h.q.toLowerCase() === q)) {
         const labelText = bangInfo
@@ -1816,7 +2100,8 @@ function renderSuggest() {
 function moveSuggest(dir) {
     const box = suggestBox(); if (!box || box.hidden || box.classList.contains('closing')) return false;
     const lis = [...suggestList().children]; if (!lis.length) return false;
-    sugSel = (sugSel + dir + lis.length) % lis.length;
+    if (sugSel < 0) sugSel = dir > 0 ? 0 : lis.length - 1;
+    else sugSel = (sugSel + dir + lis.length) % lis.length;
     lis.forEach((li, i) => {
         const sel = i === sugSel;
         li.classList.toggle('sel', sel);
@@ -1832,6 +2117,7 @@ const debouncedSuggest = debounce(renderSuggest, 90);
 
 function hideSuggest() {
     debouncedSuggest.cancel();
+    lastSuggestSig = '';
     const b = suggestBox();
     if (b && !b.hidden && !b.classList.contains('closing')) {
         sugSel = -1;
@@ -1877,6 +2163,11 @@ async function goSearch(forceNewTab = false) {
 
     const bang = parseBangQuery(raw);
     if (bang && !bang.query) {
+        if (!inp.value.endsWith(' ')) {
+            inp.value = bang.bang + ' ';
+            syncSearchClearBtn();
+            renderSuggest();
+        }
         toast(`Введите запрос после ${bang.bang}`);
         return;
     }
@@ -1885,7 +2176,7 @@ async function goSearch(forceNewTab = false) {
     if (dur) $('#search-go')?.animate?.([{ transform: 'scale(.88)' }, { transform: 'none' }], { duration: dur, easing: EASE });
 
     const asUrl = bang ? '' : normalizeUrl(raw);
-    const isUrl = !bang && (/^https?:\/\//i.test(raw) || (asUrl !== '' && !raw.includes(' ')));
+    const isUrl = Boolean(asUrl);
     if (!isUrl && (settingsCache || DEFAULT_SETTINGS).saveSearchHistory !== false) {
         const low = raw.toLowerCase();
         qHistory = [{ id: String(Date.now()), q: raw }, ...qHistory.filter(h => h.q.toLowerCase() !== low)].slice(0, HISTORY_LIMIT);
@@ -1904,7 +2195,10 @@ async function initSearch(preloaded, history) {
     engine = ENGINES[s.engine] ? s.engine : 'google';
     qHistory = history || await store.getHistory();
     paintEngine();
-    if (searchBound) return;
+    if (searchBound) {
+        if (qHistory.length && document.activeElement === searchInput()) renderSuggest();
+        return;
+    }
     searchBound = true;
 
     const engBtn = $('#engine-btn');
@@ -1992,6 +2286,8 @@ async function initSearch(preloaded, history) {
             } else if (e.target.value) {
                 e.target.value = '';
                 syncSearchClearBtn();
+            } else {
+                e.target.blur();
             }
         }
     });
@@ -2000,8 +2296,9 @@ async function initSearch(preloaded, history) {
         if (area === 'local' && changes.history) {
             const next = normalizeHistory(changes.history.newValue);
             const sig = JSON.stringify(next);
-            if (sig === store.histSig) return;
+            if (store._consumeOwnSig(store._ownHistSigs, sig) || sig === store.histSig) return;
             store.histSig = sig;
+            if (isExt) safeLS.set(FAST_BOOT_H_KEY, sig);
             qHistory = next;
             const box = suggestBox();
             if (box && !box.hidden && !box.classList.contains('closing')) renderSuggest();
@@ -2074,7 +2371,7 @@ async function initSearch(preloaded, history) {
         await store.setHistory([]);
         renderSuggest();
     });
-    document.addEventListener('click', e => { if (!e.target.closest('.search-row')) hideSuggest(); });
+    document.addEventListener('pointerdown', e => { if (!e.target.closest('.search-row')) hideSuggest(); });
 }
 
 /* ---------- 10. Категории и ярлыки ---------- */
@@ -2085,11 +2382,14 @@ let catsBusy = false, catsDirty = false, catsPending = null, catsRun = Promise.r
 function renderCats(data, force = false) {
     const s = settingsCache || DEFAULT_SETTINGS;
     const renderFlags = `${!!s.numHotkeys}`;
-    const sig = Array.isArray(data) ? JSON.stringify(data) + '|' + renderFlags : null;
+    const baseSig = Array.isArray(data)
+        ? ((!force && data === categories && store.catsSig) ? store.catsSig : JSON.stringify(data))
+        : null;
+    const sig = baseSig !== null ? baseSig + '|' + renderFlags : null;
     if (catsBusy) {
         if (force || sig === null || sig !== catsSig) {
             catsDirty = true;
-            if (Array.isArray(data)) catsPending = { data, sig };
+            catsPending = Array.isArray(data) ? { data, sig } : null;
         }
         return catsRun;
     }
@@ -2105,9 +2405,15 @@ function renderCats(data, force = false) {
                 categories = pending ? pending.data : await store.getCategories();
                 const curS = settingsCache || DEFAULT_SETTINGS;
                 const flags = `${!!curS.numHotkeys}`;
-                catsSig = (pending ? pending.sig : JSON.stringify(categories) + '|' + flags);
+                catsSig = (pending ? pending.sig : (store.catsSig || JSON.stringify(categories)) + '|' + flags);
                 const wrap = $('#cats'); if (!wrap) return;
-                const dur = !document.documentElement.classList.contains('intro') ? animDur(180) : 0;
+                if (activeCatDragCancel) activeCatDragCancel();
+                if (dragState) clearDrag();
+                const nextLayoutSig = categories.map(c => c.id + ':' + (c.shortcuts || []).map(s => s.id).join(',')).join(';');
+                const layoutChanged = wrap.dataset.layoutSig !== undefined && wrap.dataset.layoutSig !== nextLayoutSig;
+                wrap.dataset.layoutSig = nextLayoutSig;
+                const modalOpen = !!document.querySelector('.overlay:not([hidden]):not(.closing)');
+                const dur = (!document.documentElement.classList.contains('intro') && layoutChanged && !modalOpen) ? animDur(180) : 0;
                 const oldCards = new Map(), oldChips = new Map();
                 const prevCats = dur ? new Map() : null, prevChips = dur ? new Map() : null;
                 if (wrap.childElementCount) {
@@ -2130,15 +2436,15 @@ function renderCats(data, force = false) {
                     wrap.replaceChildren(...nextCards);
                 }
                 if (prevCats) {
+                    const animQueue = [];
                     for (const card of nextCards) {
                         const prevCat = prevCats.get(card.dataset.id);
-                        let cardDx = 0, cardDy = 0;
                         if (prevCat) {
                             const curCat = card.getBoundingClientRect();
-                            cardDx = prevCat.left - curCat.left;
-                            cardDy = prevCat.top - curCat.top;
+                            const cardDx = prevCat.left - curCat.left;
+                            const cardDy = prevCat.top - curCat.top;
                             if (cardDx || cardDy) {
-                                card.animate?.([{ transform: `translate3d(${cardDx}px,${cardDy}px,0)` }, { transform: 'none' }], { duration: dur, easing: EASE });
+                                animQueue.push([card, [{ transform: `translate3d(${cardDx}px,${cardDy}px,0)` }, { transform: 'none' }]]);
                             }
                             for (const ch of card.querySelectorAll('.chip[data-id]')) {
                                 const prev = prevChips.get(ch.dataset.id);
@@ -2146,18 +2452,45 @@ function renderCats(data, force = false) {
                                     const cur = ch.getBoundingClientRect();
                                     const dx = (prev.left - cur.left) - cardDx, dy = (prev.top - cur.top) - cardDy;
                                     if (dx || dy) {
-                                        ch.animate?.([{ transform: `translate3d(${dx}px,${dy}px,0)` }, { transform: 'none' }], { duration: dur, easing: EASE });
+                                        animQueue.push([ch, [{ transform: `translate3d(${dx}px,${dy}px,0)` }, { transform: 'none' }]]);
                                     }
                                 } else {
-                                    ch.animate?.([{ opacity: 0, transform: 'scale(.86)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
+                                    animQueue.push([ch, [{ opacity: 0, transform: 'scale(.86)' }, { opacity: 1, transform: 'none' }]]);
                                 }
                             }
                         } else {
-                            card.animate?.([{ opacity: 0, transform: 'translateY(10px) scale(.96)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
+                            animQueue.push([card, [{ opacity: 0, transform: 'translateY(10px) scale(.96)' }, { opacity: 1, transform: 'none' }]]);
                         }
+                    }
+                    for (const [node, kf] of animQueue) {
+                        node.animate?.(kf, { duration: dur, easing: EASE });
                     }
                 }
             } while (catsDirty);
+            const sg = $('#suggest');
+            if (sg && !sg.hidden && !sg.classList.contains('closing')) renderSuggest();
+            const catModalEl = $('#cat-modal');
+            if (catModalEl && !catModalEl.hidden && !catModalEl.classList.contains('closing')) {
+                if (catModal.id && !categories.some(c => c.id === catModal.id)) {
+                    toggleOverlay(catModalEl, false);
+                }
+            }
+            const scModalEl = $('#sc-modal');
+            if (scModalEl && !scModalEl.hidden && !scModalEl.classList.contains('closing')) {
+                const scExists = !scModal.scId || categories.some(c => c.shortcuts?.some(s => s.id === scModal.scId));
+                if (!categories.length || !scExists) {
+                    toggleOverlay(scModalEl, false);
+                } else {
+                    const catSel = $('#sc-cat');
+                    if (catSel) {
+                        const curVal = catSel.value || scModal.catId;
+                        catSel.replaceChildren(...categories.map(c =>
+                            el('option', { value: c.id }, (c.icon ? c.icon + ' ' : '') + (c.name || 'Категория'))
+                        ));
+                        catSel.value = categories.some(c => c.id === curVal) ? curVal : (categories[0]?.id ?? '');
+                    }
+                }
+            }
         } finally { catsBusy = false; }
     })();
     return catsRun;
@@ -2257,10 +2590,11 @@ function buildChip(cat, sc, hkNum = 0) {
 }
 
 async function saveCats(skipRender = false) {
-    await store.setCategories(categories);
+    const savePromise = store.setCategories(categories);
     if (!skipRender) await renderCats(categories, true);
     const sg = $('#suggest');
     if (sg && !sg.hidden) renderSuggest();
+    await savePromise;
 }
 
 function moveChip(from, scId, to, targetId, after) {
@@ -2284,37 +2618,52 @@ function flipReorder(wrap, mutate, skipNode) {
     mutate();
     const dur = animDur(180);
     if (!dur) return;
+    const moves = [];
     for (const c of cards) {
         const a = first.get(c), b = c.getBoundingClientRect();
         const dx = a.left - b.left, dy = a.top - b.top;
-        if (dx || dy) {
-            c.getAnimations?.().forEach(an => an.cancel());
-            c.animate([{ transform: `translate3d(${dx}px,${dy}px,0)` }, { transform: 'none' }],
-                      { duration: dur, easing: EASE });
-        }
+        if (dx || dy) moves.push([c, dx, dy]);
+    }
+    for (const [c, dx, dy] of moves) {
+        c.getAnimations?.().forEach(an => an.cancel());
+        c.animate([{ transform: `translate3d(${dx}px,${dy}px,0)` }, { transform: 'none' }],
+                  { duration: dur, easing: EASE });
     }
 }
 
+let activeCatDragCancel = null;
 function startCatDrag(e, card, head) {
     if (e.button !== 0 || e.target.closest('button')) return;
+    if (activeCatDragCancel) activeCatDragCancel();
     const wrap = card.parentElement, sx = e.clientX, sy = e.clientY, pid = e.pointerId;
     let on = false, ph = null, origNext = null, lock = 0, rafId = 0, lastX = sx, lastY = sy, lastSwap = null;
-    let ended = false;
+    let ended = false, cachedRects = null;
+
+    const getSiblingRects = () => {
+        if (!cachedRects) {
+            cachedRects = [];
+            for (const n of wrap.children) {
+                if (n !== card) cachedRects.push({ node: n, rect: n.getBoundingClientRect() });
+            }
+        }
+        return cachedRects;
+    };
 
     const step = () => {
         rafId = 0;
-        if (ended || !on) return;
+        if (ended || !on || !card.isConnected) return;
         const x = lastX, y = lastY;
         card.style.transform = `translate3d(${x - sx}px,${y - sy}px,0)`;
         let scrolled = false;
-        if (y < 70) { window.scrollBy(0, -14); scrolled = true; }
-        else if (y > innerHeight - 70) { window.scrollBy(0, 14); scrolled = true; }
+        if (y < 70 || y > innerHeight - 70) {
+            const prevY = window.scrollY;
+            window.scrollBy(0, y < 70 ? -14 : 14);
+            if (window.scrollY !== prevY) { scrolled = true; cachedRects = null; }
+        }
         const now = performance.now();
         if (now >= lock) {
             let hit = null, overPh = false;
-            for (const n of wrap.children) {
-                if (n === card) continue;
-                const q = n.getBoundingClientRect();
+            for (const { node: n, rect: q } of getSiblingRects()) {
                 if (x >= q.left && x <= q.right && y >= q.top && y <= q.bottom) {
                     if (n === ph) overPh = true;
                     else hit = n;
@@ -2324,8 +2673,9 @@ function startCatDrag(e, card, head) {
             if (!hit) { if (!overPh) lastSwap = null; }
             else if (hit !== lastSwap) {
                 lastSwap = hit;
-                lock = now + 170;
+                lock = now + 180;
                 flipReorder(wrap, () => (ph.compareDocumentPosition(hit) & Node.DOCUMENT_POSITION_FOLLOWING) ? hit.after(ph) : hit.before(ph), card);
+                cachedRects = null;
             }
         }
         if (scrolled && !rafId) rafId = requestAnimationFrame(step);
@@ -2333,6 +2683,10 @@ function startCatDrag(e, card, head) {
 
     const move = ev => {
         if (ev.pointerId !== pid || ended) return;
+        if (ev.buttons !== undefined && (ev.buttons & 1) === 0) {
+            end(ev, true);
+            return;
+        }
         const x = ev.clientX, y = ev.clientY;
         lastX = x; lastY = y;
         if (!on) {
@@ -2351,24 +2705,26 @@ function startCatDrag(e, card, head) {
                 height: r.height + 'px', zIndex: 60, pointerEvents: 'none', margin: 0, willChange: 'transform'
             });
             document.body.classList.add('cat-dragging');
+            cachedRects = null;
         }
         if (!rafId) rafId = requestAnimationFrame(step);
     };
 
     const onKey = ev => { if (ev.key === 'Escape') end({ pointerId: pid }, true); };
     const onBlur = () => end({ pointerId: pid }, true);
-    const onScroll = () => { if (on && !ended && !rafId) rafId = requestAnimationFrame(step); };
+    const onScroll = () => { cachedRects = null; if (on && !ended && !rafId) rafId = requestAnimationFrame(step); };
     const end = (ev, cancel) => {
         if (ended || (ev && ev.pointerId != null && ev.pointerId !== pid)) return;
         ended = true;
+        if (activeCatDragCancel === forceCancel) activeCatDragCancel = null;
         if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
         window.removeEventListener('keydown', onKey);
         window.removeEventListener('blur', onBlur);
         window.removeEventListener('scroll', onScroll);
         window.removeEventListener('contextmenu', cancelUp, true);
-        head.removeEventListener('pointermove', move);
-        head.removeEventListener('pointerup', up);
-        head.removeEventListener('pointercancel', cancelUp);
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', cancelUp);
         head.removeEventListener('lostpointercapture', cancelUp);
         if (on) { try { head.releasePointerCapture(pid); } catch {} }
         if (!on) return;
@@ -2397,18 +2753,23 @@ function startCatDrag(e, card, head) {
         if (next.length === categories.length && next.some((c, i) => c !== categories[i])) {
             categories = next;
             const hasHk = !!settingsCache?.numHotkeys;
-            if (!hasHk) catsSig = JSON.stringify(categories) + '|false';
+            if (!hasHk) {
+                catsSig = JSON.stringify(categories) + '|false';
+                wrap.dataset.layoutSig = categories.map(c => c.id + ':' + (c.shortcuts || []).map(s => s.id).join(',')).join(';');
+            }
             saveCats(!hasHk);
         }
     };
     const up = ev => end(ev, false), cancelUp = ev => end(ev, true);
+    const forceCancel = () => end({ pointerId: pid }, true);
+    activeCatDragCancel = forceCancel;
     window.addEventListener('keydown', onKey);
     window.addEventListener('blur', onBlur);
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('contextmenu', cancelUp, true);
-    head.addEventListener('pointermove', move);
-    head.addEventListener('pointerup', up);
-    head.addEventListener('pointercancel', cancelUp);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancelUp);
     head.addEventListener('lostpointercapture', cancelUp);
 }
 
@@ -2417,9 +2778,12 @@ function updateIconPreview(iconValue, urlValue) {
     const hint = $('#sc-icon-hint');
     if (!preview) return;
 
+    const rawIcon = (iconValue || '').trim();
+    const normIcon = (!rawIcon || isIconUrl(rawIcon)) ? rawIcon : (normalizeUrl(rawIcon) || (/^[a-z][a-z0-9+.-]*:/i.test(rawIcon) ? '' : rawIcon));
+
     delete preview.dataset.fbTried;
     preview.onerror = () => {
-        if (!iconValue && urlValue && !preview.dataset.fbTried) {
+        if (!normIcon && urlValue && !preview.dataset.fbTried) {
             preview.dataset.fbTried = '1';
             const alt = faviconFallbackOf(urlValue);
             if (alt && preview.src !== alt) { preview.src = alt; return; }
@@ -2430,14 +2794,14 @@ function updateIconPreview(iconValue, urlValue) {
         const dur = animDur(180);
         if (dur) preview.animate?.([{ opacity: 0, transform: 'scale(.88)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
     };
-    if (isIconUrl(iconValue)) {
-        if (preview.getAttribute('src') !== iconValue) preview.src = iconValue;
+    if (isIconUrl(normIcon)) {
+        if (preview.getAttribute('src') !== normIcon) preview.src = normIcon;
         preview.hidden = false;
         if (hint) hint.textContent = 'Своя иконка';
-    } else if (iconValue) {
+    } else if (normIcon) {
         preview.hidden = true;
         preview.removeAttribute('src');
-        if (hint) hint.textContent = 'Эмодзи: ' + iconValue;
+        if (hint) hint.textContent = 'Эмодзи: ' + normIcon;
     } else {
         const src = urlValue ? faviconOf(urlValue) : '';
         if (src) {
@@ -2453,13 +2817,28 @@ function updateIconPreview(iconValue, urlValue) {
 
 function pickImage(max) {
     return new Promise(resolve => {
-        const input = el('input', { type: 'file', accept: 'image/*' });
-        input.onchange = async () => {
-            const file = input.files[0];
-            if (!file) return resolve(null);
-            try { resolve(await downscaleImage(file, max)); }
-            catch (err) { console.error('[KOCH] image:', err); toast('Не удалось загрузить картинку', 'error'); resolve(null); }
+        let settled = false, focusT = 0;
+        const finish = val => {
+            if (settled) return;
+            settled = true;
+            if (focusT) { clearTimeout(focusT); focusT = 0; }
+            window.removeEventListener('focus', onFocusBack);
+            resolve(val);
         };
+        const onFocusBack = () => {
+            focusT = setTimeout(() => { if (!input.files?.length) finish(null); }, 1200);
+        };
+        const input = el('input', { type: 'file', accept: 'image/*' });
+        input.oncancel = () => finish(null);
+        input.onchange = async () => {
+            if (focusT) { clearTimeout(focusT); focusT = 0; }
+            window.removeEventListener('focus', onFocusBack);
+            const file = input.files[0];
+            if (!file) return finish(null);
+            try { finish(await downscaleImage(file, max)); }
+            catch (err) { console.error('[KOCH] image:', err); toast('Не удалось загрузить картинку', 'error'); finish(null); }
+        };
+        window.addEventListener('focus', onFocusBack, { once: true });
         input.click();
     });
 }
@@ -2523,6 +2902,7 @@ let overlayReturn = null;
 function toggleOverlay(ov, open, focusSel = '.close-btn') {
     if (!ov) return;
     if (open) {
+        hideSuggest();
         const wasClosing = ov.classList.contains('closing');
         if (ov._closeT) { clearTimeout(ov._closeT); ov._closeT = 0; }
         const wasOpen = !ov.hidden && !wasClosing;
@@ -2541,14 +2921,18 @@ function toggleOverlay(ov, open, focusSel = '.close-btn') {
         if (body) body.scrollTop = 0;
     } else {
         if (ov.hidden || ov.classList.contains('closing')) return;
+        let finishCleanup = null;
         if (ov.id === 'sc-modal') {
             scModal = { catId: null, scId: null };
-            const p = $('#sc-icon-preview'); if (p) { p.hidden = true; p.removeAttribute('src'); }
+            syncScPreviewDebounced?.cancel();
+            finishCleanup = () => { const p = $('#sc-icon-preview'); if (p) { p.hidden = true; p.removeAttribute('src'); } };
         } else if (ov.id === 'cat-modal') {
             catModal = { id: null, image: '' };
             resetConfirm($('#cat-delete'));
-            const p = $('#cat-img-preview'); if (p) { p.hidden = true; p.removeAttribute('src'); }
+            finishCleanup = () => { const p = $('#cat-img-preview'); if (p) { p.hidden = true; p.removeAttribute('src'); } };
         } else if (ov.id === 'settings-overlay') {
+            flushPendingSaves();
+            lastSettingsUISig = '';
             resetConfirm($('#reset-btn'));
         }
         const dur = animDur(160);
@@ -2558,9 +2942,11 @@ function toggleOverlay(ov, open, focusSel = '.close-btn') {
                 ov.classList.remove('closing');
                 ov.hidden = true;
                 ov._closeT = 0;
+                finishCleanup?.();
             }, dur);
         } else {
             ov.hidden = true;
+            finishCleanup?.();
         }
         const anyOpen = !!document.querySelector('.overlay:not([hidden]):not(.closing)');
         for (const n of document.querySelectorAll('.topbar,.panel')) n.inert = anyOpen;
@@ -2574,7 +2960,7 @@ const closeOverlays = () => document.querySelectorAll('.overlay:not([hidden]):no
 
 function closeScModal() { toggleOverlay($('#sc-modal'), false); }
 
-let scModalBound = false;
+let scModalBound = false, syncScPreviewDebounced = null;
 function bindScModal() {
     if (scModalBound) return;
     scModalBound = true;
@@ -2585,19 +2971,12 @@ function bindScModal() {
             || (scModal.scId ? categories.find(c => c.shortcuts?.some(x => x.id === scModal.scId)) : null);
         const targetCatId = $('#sc-cat')?.value || scModal.catId;
         const targetCat = categories.find(c => c.id === targetCatId) || origCat;
-        if (!targetCat) return;
+        if (!targetCat) { toast('Сначала создайте категорию', 'error'); closeScModal(); return; }
         const normUrl = normalizeUrl($('#sc-url')?.value);
         if (!normUrl) { toast('Не похоже на адрес сайта. Пример: example.com', 'error'); return; }
-        let title = ($('#sc-name')?.value || '').trim();
-        if (!title) {
-            try {
-                const h = new URL(normUrl).hostname.replace(/^www\./i, '');
-                title = (h.split('.')[0] || h);
-                title = title.charAt(0).toUpperCase() + title.slice(1);
-            } catch { title = normUrl; }
-        }
+        const title = ($('#sc-name')?.value || '').trim() || titleFromUrl(normUrl);
         const rawIcon = ($('#sc-icon')?.value || '').trim();
-        const icon = (!rawIcon || /^(https?:|data:)/i.test(rawIcon)) ? rawIcon : (normalizeUrl(rawIcon) || rawIcon);
+        const icon = (!rawIcon || isIconUrl(rawIcon)) ? rawIcon : (normalizeUrl(rawIcon) || (/^[a-z][a-z0-9+.-]*:/i.test(rawIcon) ? '' : rawIcon));
         const data = {
             title,
             url: normUrl,
@@ -2642,12 +3021,12 @@ function bindScModal() {
         toast('Иконка сброшена на дефолтную');
     });
 
-    const syncScPreview = debounce(() => {
+    syncScPreviewDebounced = debounce(() => {
         const iconVal = ($('#sc-icon')?.value || '').trim();
         updateIconPreview(iconVal, $('#sc-url')?.value || '');
     }, 200);
-    $('#sc-url')?.addEventListener('input', syncScPreview);
-    $('#sc-icon')?.addEventListener('input', syncScPreview);
+    $('#sc-url')?.addEventListener('input', syncScPreviewDebounced);
+    $('#sc-icon')?.addEventListener('input', syncScPreviewDebounced);
 }
 
 const CAT_EMOJIS = ['🌐','🎵','🎮','💻','🛒','📚','🎨','📰','🏠','📱','🔧','💎','🚀','🎯','☕','📺','🌙','⭐','🎬','🧩'];
@@ -2658,12 +3037,14 @@ function renderCatImage() {
     const img = $('#cat-img-preview'), has = !!catModal.image;
     img.hidden = !has;
     if (has) {
+        img.onerror = () => { img.hidden = true; img.removeAttribute('src'); };
         img.onload = () => {
             const dur = animDur(180);
             if (dur) img.animate?.([{ opacity: 0, transform: 'scale(.88)' }, { opacity: 1, transform: 'none' }], { duration: dur, easing: EASE });
         };
         if (img.getAttribute('src') !== catModal.image) img.src = catModal.image;
     } else {
+        img.onerror = null;
         img.removeAttribute('src');
     }
     $('#cat-img-clear').hidden = !has;
@@ -2676,7 +3057,7 @@ function bindCatForm() {
     $('#cat-form')?.addEventListener('submit', async e => {
         e.preventDefault();
         const name = $('#cat-name').value.trim();
-        if (!name) return;
+        if (!name) { toast('Введите название категории', 'error'); $('#cat-name')?.focus(); return; }
         const fields = { name, icon: $('#cat-icon').value.trim(), image: catModal.image };
         const cat = categories.find(c => c.id === catModal.id);
         if (cat) Object.assign(cat, fields);
@@ -2685,12 +3066,13 @@ function bindCatForm() {
         await saveCats();
         toast(cat ? 'Категория обновлена' : 'Категория добавлена');
     });
+    const ruCollator = new Intl.Collator('ru', { sensitivity: 'base', numeric: true });
     $('#cat-sort-az')?.addEventListener('click', async () => {
         const cat = categories.find(c => c.id === catModal.id);
         if (!cat || (cat.shortcuts?.length || 0) < 2) return;
-        const collator = new Intl.Collator('ru', { sensitivity: 'base', numeric: true });
-        cat.shortcuts.sort((a, b) => collator.compare(a.title || a.url || '', b.title || b.url || ''));
-        await saveCats();
+        const prevIds = cat.shortcuts.map(x => x.id).join(',');
+        cat.shortcuts.sort((a, b) => ruCollator.compare(a.title || a.url || '', b.title || b.url || ''));
+        if (cat.shortcuts.map(x => x.id).join(',') !== prevIds) await saveCats();
         toast('Ярлыки отсортированы А–Я');
     });
     $('#cat-delete')?.addEventListener('click', async e => {
@@ -2794,6 +3176,7 @@ function bindCatModal() {
             e.dataTransfer.setData('text/plain', 'chip');
             e.dataTransfer.effectAllowed = 'move';
             setTimeout(() => {
+                if (!dragState) return;
                 chip.classList.add('dragging');
                 document.body.classList.add('chip-dragging');
             }, 0);
@@ -2872,20 +3255,33 @@ function bindCatModal() {
         wrap.addEventListener('dragend', e => {
             if (e.target.closest('.chip')) clearDrag();
         });
+        window.addEventListener('dragend', () => { if (dragState) clearDrag(); });
+        window.addEventListener('blur', () => { if (dragState) clearDrag(); });
     }
     $('#add-cat')?.addEventListener('click', () => openCatModal(null));
 }
 
 /* ---------- 11. Настройки ---------- */
 const on = (id, ev, fn) => { const e = document.getElementById(id); if (e) e.addEventListener(ev, fn); return e; };
-const val = (id, v) => { const e = document.getElementById(id); if (e) { e.value = v; if (e.type === 'range') paintRange(e); } };
-const chk = (id, v) => { const e = document.getElementById(id); if (e) e.checked = Boolean(v); };
+const val = (id, v) => {
+    const e = document.getElementById(id);
+    if (!e) return null;
+    const sv = String(v);
+    if (e.value !== sv) e.value = sv;
+    if (e.type === 'range') paintRange(e);
+    return e;
+};
+const chk = (id, v) => { const e = document.getElementById(id); if (e && e.checked !== Boolean(v)) e.checked = Boolean(v); };
 
 function paintRange(e) {
     const mn = +e.min || 0, mx = +e.max || 100;
-    e.style.setProperty('--p', ((e.value - mn) / (mx - mn || 1) * 100) + '%');
+    const p = ((e.value - mn) / (mx - mn || 1) * 100) + '%';
+    if (e._lastP !== p) {
+        e._lastP = p;
+        e.style.setProperty('--p', p);
+    }
 }
-const txt = (id, s) => { const e = document.getElementById(id); if (e) e.textContent = s; };
+const txt = (id, s) => { const e = document.getElementById(id); if (e && e.textContent !== s) e.textContent = s; };
 
 function downscaleImage(file, max = 256) {
     return new Promise((resolve, reject) => {
@@ -2893,6 +3289,10 @@ function downscaleImage(file, max = 256) {
         const img = new Image();
         img.onload = () => {
             try {
+                if ((file.type === 'image/svg+xml' && file.size <= 131072) || (file.type === 'image/gif' && file.size <= 262144)) {
+                    resolve(blobToBase64(file));
+                    return;
+                }
                 const scale = Math.min(1, max / Math.max(img.width || max, img.height || max));
                 const w = Math.max(1, Math.round((img.width || max) * scale));
                 const h = Math.max(1, Math.round((img.height || max) * scale));
@@ -2926,13 +3326,14 @@ async function updateAppearanceSetting(key, valueOrFn, applyDom = true) {
 }
 
 async function setCustomColor(hex) {
-    await store.updateSettings(s => ({ ...s, customColor: hex, theme: 'custom' }));
     document.documentElement.dataset.theme = 'custom';
     document.body.dataset.theme = 'custom';
     appliedTheme = 'custom';
     applyCustomThemeVars(hex);
     const sel = $('#theme-select'); if (sel) sel.value = 'custom';
     syncThemeSwatches('custom');
+    if (settingsCache?.theme === 'custom' && settingsCache?.customColor === hex) return;
+    await store.updateSettings(s => ({ ...s, customColor: hex, theme: 'custom' }));
 }
 
 const LIVE_SLIDER_VARS = {
@@ -2983,21 +3384,21 @@ function bindSlider(inputId, path, suffix, step = 1) {
     const valueId = inputId + '-val';
     const parse = e => step < 1 ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
     let raf = 0, latest = 0;
+    const cancelRaf = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };
     const applyLive = () => {
         raf = 0;
         const fn = LIVE_SLIDER_VARS[path];
         if (!fn) return;
         const res = fn(latest);
-        const st = document.documentElement.style;
-        if (Array.isArray(res[0])) res.forEach(([k, val]) => st.setProperty(k, val));
-        else st.setProperty(res[0], res[1]);
+        if (Array.isArray(res[0])) res.forEach(([k, val]) => setRootVar(k, val));
+        else setRootVar(res[0], res[1]);
     };
     const save = saveDebounced(v => {
-        if (raf) { cancelAnimationFrame(raf); applyLive(); }
+        applyLive();
         const parts = path.split('.');
         if (parts.length === 1) updateAppearanceSetting(parts[0], v, false);
         else updateAppearanceSetting(parts[0], prev => ({ ...prev, [parts[1]]: v }), false);
-    }, 120);
+    }, 120, cancelRaf);
     on(inputId, 'input', e => {
         const v = parse(e);
         latest = v;
@@ -3025,12 +3426,16 @@ function paintAvatar(url, title = '') {
 
 function invalidateRuntimeState() {
     cancelPendingSaves();
+    if (activeCatDragCancel) activeCatDragCancel();
+    if (dragState) clearDrag();
     settingsCache = null;
     categories = [];
     catsSig = '';
     catsPending = null;
     qHistory = [];
     appliedTheme = null;
+    rootVarCache.clear();
+    lastSettingsUISig = '';
     bgMediaSig = '';
     bgAppliedSig = '';
     clockConfigSig = '';
@@ -3042,6 +3447,10 @@ function invalidateRuntimeState() {
         try { URL.revokeObjectURL(bgObjectUrl); } catch {}
         bgObjectUrl = null;
     }
+    const bgFile = document.getElementById('set-bg-file');
+    if (bgFile) bgFile.value = '';
+    const avFile = document.getElementById('set-avatar');
+    if (avFile) avFile.value = '';
 }
 
 const SLIDERS = [
@@ -3085,7 +3494,11 @@ const SLIDERS = [
 const getByPath = (o, p) => p.includes('.') ? p.split('.').reduce((a, k) => a?.[k], o) : o?.[p];
 
 /* ---------- 11.1. Синхронизация UI настроек ---------- */
-function syncSettingsUI(s) {
+let lastSettingsUISig = '';
+function syncSettingsUI(s, force = false) {
+    const sig = (s === settingsCache && store.sig) ? store.sig : JSON.stringify(s);
+    if (!force && sig === lastSettingsUISig) return;
+    lastSettingsUISig = sig;
     initThemeSelector(s.theme || 'rose');
     const d = DEFAULT_SETTINGS.appearance;
     val('theme-select', s.theme || 'rose');
@@ -3154,8 +3567,12 @@ async function applyEverything() {
     initClocks(s);
     await renderCats();
     store.sig = JSON.stringify(s);
+    settingsCache = s;
+    store.catsSig = JSON.stringify(categories);
+    store.histSig = JSON.stringify(qHistory);
+    store._saveFastBoot(s, categories, qHistory);
     const setOv = document.getElementById('settings-overlay');
-    if (setOv && !setOv.hidden) syncSettingsUI(s);
+    if (setOv && !setOv.hidden) syncSettingsUI(s, true);
 }
 
 let overlaysBound = false;
@@ -3165,9 +3582,14 @@ function bindOverlays() {
     on('settings-btn', 'click', openSettings);
 
     document.querySelectorAll('.overlay').forEach(ov => {
-        ov.addEventListener('click', e => { if (e.target === ov) toggleOverlay(ov, false); });
+        let downOnBackdrop = false;
+        ov.addEventListener('pointerdown', e => { downOnBackdrop = e.target === ov && e.button === 0; });
+        ov.addEventListener('click', e => {
+            if (downOnBackdrop && e.target === ov) toggleOverlay(ov, false);
+            downOnBackdrop = false;
+        });
         ov.addEventListener('keydown', e => {
-            if (e.key !== 'Tab') return;
+            if (e.key !== 'Tab' || ov.hidden || ov.classList.contains('closing')) return;
             const focusables = [...ov.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
                 .filter(el => !el.closest('[hidden]'));
             if (!focusables.length) return;
@@ -3212,7 +3634,9 @@ function bindSettings() {
     });
 
     const applyCity = async (idx, valStr) => {
-        const next = await updateSetting('cities', prev => { const c = (prev || []).slice(); c[idx] = valStr; return c; });
+        const clean = valStr.trim();
+        if ((settingsCache?.cities?.[idx] ?? '').trim() === clean) return;
+        const next = await updateSetting('cities', prev => { const c = (prev || []).slice(); c[idx] = clean; return c; });
         initClocks(next);
     };
     const bindCity = (id, idx) => {
@@ -3236,7 +3660,11 @@ function bindSettings() {
 
     on('set-open-newtab', 'change', e => updateSetting('openInNewTab', e.target.checked));
     on('set-auto-focus-search', 'change', e => updateSetting('autoFocusSearch', e.target.checked));
-    on('set-search-shortcuts', 'change', e => updateSetting('searchShortcuts', e.target.checked));
+    on('set-search-shortcuts', 'change', async e => {
+        await updateSetting('searchShortcuts', e.target.checked);
+        const sg = $('#suggest');
+        if (sg && !sg.hidden && !sg.classList.contains('closing')) renderSuggest();
+    });
     on('set-save-history', 'change', e => updateSetting('saveSearchHistory', e.target.checked));
     on('set-num-hotkeys', 'change', async e => { await updateSetting('numHotkeys', e.target.checked); renderCats(categories); });
     on('set-hide-chip-names', 'change', async e => applyLayoutPreferences(await updateSetting('hideChipNames', e.target.checked)));
@@ -3250,21 +3678,21 @@ function bindSettings() {
         const f = e.target.files[0]; if (!f) return;
         try {
             const url = await downscaleImage(f, 256);
-            await updateSetting('avatar', url);
-            paintAvatar(url); toast('Аватар обновлён');
+            const next = await updateSetting('avatar', url);
+            paintAvatar(url, next.title); toast('Аватар обновлён');
         } catch (err) {
             toast('Не удалось прочитать файл', 'error');
         }
         e.target.value = '';
     });
     on('reset-avatar', 'click', async () => {
-        await updateSetting('avatar', ''); paintAvatar(''); toast('Аватар сброшен');
+        const next = await updateSetting('avatar', '');
+        paintAvatar('', next.title); toast('Аватар сброшен');
     });
 
     on('set-bg-type', 'change', async e => {
         const type = e.target.value;
-        const next = await updateSetting('bg', prev => type === 'none' ? { ...prev, type, idb: '' } : { ...prev, type });
-        if (type === 'none') mediaDel(MEDIA_KEY).catch(() => {});
+        const next = await updateSetting('bg', prev => ({ ...prev, type }));
         await applyBackground(next);
     });
     on('set-bg-file', 'change', async e => {
@@ -3273,8 +3701,8 @@ function bindSettings() {
             const isVideo = f.type.startsWith('video/') || /\.(mp4|webm|ogv|ogg|mov|m4v)(\?|#|$)/i.test(f.name || '');
             const type = isVideo ? 'video' : 'image';
             const mediaBlob = type === 'image' ? await compressImageBlob(f, 2560) : f;
-            await mediaPut(MEDIA_KEY, mediaBlob);
-            const next = await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
+            const key = await mediaPutExclusive(mediaBlob);
+            const next = await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: key }));
             val('set-bg-type', type); val('set-bg-url', '');
             await applyBackground(next); toast('Фон обновлён');
         } catch (err) {
@@ -3284,14 +3712,20 @@ function bindSettings() {
         e.target.value = '';
     });
     on('set-bg-url', 'change', async e => {
-        const u = e.target.value.trim();
+        let u = e.target.value.trim();
+        if (u && !isSafeMediaUrl(u)) u = normalizeUrl(u);
+        if (e.target.value.trim() && !u) {
+            val('set-bg-url', settingsCache?.bg?.url || '');
+            toast('Некорректный URL фона', 'error');
+            return;
+        }
         if (u.startsWith('data:') && u.length > 65536) {
             try {
                 const blob = await base64ToBlob(u);
                 const type = blob.type.startsWith('video/') ? 'video' : 'image';
                 const mediaBlob = type === 'image' ? await compressImageBlob(blob, 2560) : blob;
-                await mediaPut(MEDIA_KEY, mediaBlob);
-                const next = await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: MEDIA_KEY }));
+                const key = await mediaPutExclusive(mediaBlob);
+                const next = await updateSetting('bg', prev => ({ ...prev, type, url: '', idb: key }));
                 val('set-bg-type', type);
                 val('set-bg-url', '');
                 await applyBackground(next);
@@ -3299,41 +3733,61 @@ function bindSettings() {
                 return;
             } catch (err) {
                 console.warn('[KOCH] data url bg:', err);
+                val('set-bg-url', settingsCache?.bg?.url || '');
                 toast('Не удалось прочитать data: URL', 'error');
                 return;
             }
         }
         const next = await updateSetting('bg', prev => {
             if (!u) return { ...prev, url: '', type: prev.idb ? prev.type : 'none' };
-            const autoType = /\.(mp4|webm|ogv|mov)(\?|#|$)/i.test(u) || /^data:video\//i.test(u) ? 'video' : 'image';
-            return { ...prev, type: prev.type === 'none' ? autoType : prev.type, url: u, idb: '' };
+            const isVid = /\.(mp4|webm|ogv|ogg|mov|m4v)(\?|#|$)/i.test(u) || /^data:video\//i.test(u);
+            const isImg = /\.(jpe?g|png|webp|gif|avif|bmp|svg)(\?|#|$)/i.test(u) || /^data:image\//i.test(u);
+            const nextType = isVid ? 'video' : (isImg ? 'image' : (prev.type === 'none' ? 'image' : prev.type));
+            return { ...prev, type: nextType, url: u, idb: '' };
         });
         val('set-bg-type', next.bg.type);
-        if (u) mediaDel(MEDIA_KEY).catch(err => console.warn('[KOCH] media del:', err));
+        val('set-bg-url', next.bg.url);
+        if (u) mediaClearAll();
         await applyBackground(next); toast('Фон обновлён');
     });
-    const saveBgOp = saveDebounced(async v => {
-        const next = await updateSetting('bg', prev => ({ ...prev, opacity: v }));
-        bgAppliedSig = JSON.stringify(next.bg || {});
-    }, 120);
-    on('set-bg-opacity', 'input', e => {
-        const v = parseInt(e.target.value, 10);
-        txt('set-bg-opacity-val', v + '%');
-        const op = v / 100;
-        document.documentElement.style.setProperty('--bg-opacity', op);
+    let bgOpRaf = 0, latestBgOp = 100;
+    const cancelBgOpRaf = () => { if (bgOpRaf) { cancelAnimationFrame(bgOpRaf); bgOpRaf = 0; } };
+    const applyLiveBgOp = () => {
+        bgOpRaf = 0;
+        const op = latestBgOp / 100;
+        setRootVar('--bg-opacity', op);
         const vid = document.getElementById('bg-video'), img = document.getElementById('bg-image');
         if (vid && !vid.hidden) vid.style.opacity = op;
         if (img && !img.hidden) img.style.opacity = op;
+    };
+    const saveBgOp = saveDebounced(async v => {
+        applyLiveBgOp();
+        const next = await updateSetting('bg', prev => ({ ...prev, opacity: v }));
+        bgAppliedSig = JSON.stringify(next.bg || {});
+    }, 120, cancelBgOpRaf);
+    on('set-bg-opacity', 'input', e => {
+        const v = parseInt(e.target.value, 10);
+        latestBgOp = v;
+        txt('set-bg-opacity-val', v + '%');
+        if (!bgOpRaf) bgOpRaf = requestAnimationFrame(applyLiveBgOp);
         saveBgOp(v);
     });
+    let bgDimRaf = 0, latestBgDim = 56;
+    const cancelBgDimRaf = () => { if (bgDimRaf) { cancelAnimationFrame(bgDimRaf); bgDimRaf = 0; } };
+    const applyLiveBgDim = () => {
+        bgDimRaf = 0;
+        setRootVar('--bg-dim-op', latestBgDim / 100);
+    };
     const saveBgDim = saveDebounced(async v => {
+        applyLiveBgDim();
         const next = await updateSetting('bg', prev => ({ ...prev, dim: v }));
         bgAppliedSig = JSON.stringify(next.bg || {});
-    }, 120);
+    }, 120, cancelBgDimRaf);
     on('set-bg-dim', 'input', e => {
         const v = parseInt(e.target.value, 10);
+        latestBgDim = v;
         txt('set-bg-dim-val', v + '%');
-        document.documentElement.style.setProperty('--bg-dim-op', v / 100);
+        if (!bgDimRaf) bgDimRaf = requestAnimationFrame(applyLiveBgDim);
         saveBgDim(v);
     });
     const intVal = (id, def) => {
@@ -3347,26 +3801,29 @@ function bindSettings() {
         contrast: intVal('set-bg-contrast', 100),
         sat: intVal('set-bg-sat', 100)
     });
+    let bgFxRaf = 0;
+    const cancelBgFxRaf = () => { if (bgFxRaf) { cancelAnimationFrame(bgFxRaf); bgFxRaf = 0; } };
     const applyLiveBgFx = () => {
+        bgFxRaf = 0;
         const { blur, scale, bright, contrast, sat } = readBgFxFromUI();
-        const st = document.documentElement.style;
-        st.setProperty('--bg-blur', blur + 'px');
-        st.setProperty('--bg-bright', bright + '%');
-        st.setProperty('--bg-contrast', contrast + '%');
-        st.setProperty('--bg-sat', sat + '%');
-        st.setProperty('--bg-bf', buildBgFilter(blur, bright, contrast, sat));
-        st.setProperty('--bg-scale', computeBgScale(scale, blur));
+        setRootVar('--bg-blur', blur + 'px');
+        setRootVar('--bg-bright', bright + '%');
+        setRootVar('--bg-contrast', contrast + '%');
+        setRootVar('--bg-sat', sat + '%');
+        setRootVar('--bg-bf', buildBgFilter(blur, bright, contrast, sat));
+        setRootVar('--bg-scale', computeBgScale(scale, blur));
         document.documentElement.classList.toggle('bg-scaled', scale > 100 || blur > 0);
     };
     const bindBgFxSlider = (id, key, suf) => {
         const save = saveDebounced(async v => {
+            applyLiveBgFx();
             const next = await updateSetting('bg', prev => ({ ...prev, [key]: v }));
             bgAppliedSig = JSON.stringify(next.bg || {});
-        }, 120);
+        }, 120, cancelBgFxRaf);
         on(id, 'input', e => {
             const v = parseInt(e.target.value, 10);
             txt(id + '-val', v + suf);
-            applyLiveBgFx();
+            if (!bgFxRaf) bgFxRaf = requestAnimationFrame(applyLiveBgFx);
             save(v);
         });
     };
@@ -3384,18 +3841,20 @@ function bindSettings() {
     const setOv = document.getElementById('settings-overlay');
     setOv?.addEventListener('input', e => { if (e.target.type === 'range') paintRange(e.target); });
     setOv?.addEventListener('dblclick', e => {
-        if (e.target.type === 'range' && e.target.defaultValue !== '') {
-            e.target.value = e.target.defaultValue;
-            paintRange(e.target);
-            e.target.dispatchEvent(new Event('input', { bubbles: true }));
-            const badge = document.getElementById(e.target.id + '-val');
+        const range = e.target.type === 'range' ? e.target : e.target.closest('label.fld')?.querySelector('input[type="range"]');
+        if (range && range.defaultValue !== '') {
+            range.value = range.defaultValue;
+            range.dispatchEvent(new Event('input', { bubbles: true }));
+            const badge = document.getElementById(range.id + '-val');
             const dur = animDur(200);
             if (dur && badge) badge.animate?.([{ transform: 'scale(1.16)' }, { transform: 'none' }], { duration: dur, easing: EASE });
         }
     });
 
     let colorRaf = 0, latestHex = '';
-    const saveCustomColor = saveDebounced(hex => setCustomColor(hex), 200);
+    const cancelColorRaf = () => { if (colorRaf) { cancelAnimationFrame(colorRaf); colorRaf = 0; } };
+    const saveCustomColor = saveDebounced(hex => setCustomColor(hex), 200, cancelColorRaf);
+    cancelCustomColorPreview = () => saveCustomColor.cancel();
     const previewCustomHex = hex => {
         latestHex = hex;
         if (!colorRaf) {
@@ -3430,7 +3889,11 @@ function bindSettings() {
             const h = hex.replace('#', '');
             hex = '#' + h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
         }
-        if (!/^#?[0-9a-fA-F]{6}$/.test(hex)) { toast('HEX вида #rrggbb', 'error'); return; }
+        if (!/^#?[0-9a-fA-F]{6}$/.test(hex)) {
+            val('set-custom-hex', (settingsCache?.customColor || '#ff4fa3').toLowerCase());
+            toast('HEX вида #rrggbb', 'error');
+            return;
+        }
         if (hex[0] !== '#') hex = '#' + hex;
         hex = hex.toLowerCase();
         saveCustomColor.cancel();
@@ -3459,11 +3922,19 @@ function bindSettings() {
     });
 
     /* ====== ИМПОРТ ====== */
+    const importInp = document.getElementById('import-btn');
+    importInp?.parentElement?.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            importInp.click();
+        }
+    });
     on('import-btn', 'change', async e => {
         const f = e.target.files[0];
         e.target.value = '';
         if (!f) return;
         try {
+            cancelPendingSaves();
             const text = await f.text();
             await store.importAll(text);
             invalidateRuntimeState();
@@ -3476,7 +3947,7 @@ function bindSettings() {
     });
 
     on('reset-sliders-btn', 'click', async () => {
-        cancelPendingSaves();
+        flushPendingSaves();
         const next = await store.updateSettings(s => ({
             ...s,
             bg: { ...DEFAULT_SETTINGS.bg, type: s.bg?.type || 'none', url: s.bg?.url || '', idb: s.bg?.idb || '' },
@@ -3484,7 +3955,7 @@ function bindSettings() {
         }));
         applyAppearance(next.appearance);
         await applyBackground(next);
-        syncSettingsUI(next);
+        syncSettingsUI(next, true);
         toast('Параметры вида сброшены');
     });
 
@@ -3499,8 +3970,9 @@ function bindSettings() {
 }
 
 function setSlider(inputId, value, suffix) {
-    val(inputId, value);
-    txt(inputId + '-val', fmtNum(value) + suffix);
+    const e = val(inputId, value);
+    const actual = e ? Number(e.value) : value;
+    txt(inputId + '-val', fmtNum(isNaN(actual) ? value : actual) + suffix);
 }
 
 async function openSettings() {
@@ -3543,6 +4015,17 @@ function initThemeSelector(cur) {
             el('span', { class: 'swatch-dot', style: { background: THEME_SWATCH_COLORS[id] || '#ff4fa3' } }),
             name)
         ));
+        swatches.addEventListener('keydown', e => {
+            if (e.key !== 'ArrowRight' && e.key !== 'ArrowDown' && e.key !== 'ArrowLeft' && e.key !== 'ArrowUp') return;
+            const btns = [...swatches.querySelectorAll('.swatch-btn')];
+            const idx = btns.indexOf(document.activeElement);
+            if (idx === -1) return;
+            e.preventDefault();
+            const dir = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1 : -1;
+            const nextBtn = btns[(idx + dir + btns.length) % btns.length];
+            nextBtn.focus();
+            nextBtn.click();
+        });
     } else {
         syncThemeSwatches(cur);
     }
@@ -3561,13 +4044,13 @@ function bindKeys() {
         if (dur) $('.search-bar')?.animate?.([{ transform: 'scale(1.012)' }, { transform: 'none' }], { duration: dur, easing: EASE });
     };
     document.addEventListener('keydown', e => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key.toLowerCase() === 'k' || e.code === 'KeyK')) {
             e.preventDefault();
             closeOverlays();
             focusSearchWithPulse(true);
             return;
         }
-        if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === ',' || e.code === 'Comma')) {
             e.preventDefault();
             const setOv = document.getElementById('settings-overlay');
             if (setOv && !setOv.hidden && !setOv.classList.contains('closing')) toggleOverlay(setOv, false);
@@ -3606,7 +4089,7 @@ function bindCursorGlow() {
     cursorGlowBound = true;
     const GLOW_SEL = '.chip, .clock-wx, .clock-card, .cat-card, .search-bar, .add-cat, .pill-btn';
     let raf = 0, cx = 0, cy = 0;
-    let activeEl = null, activeRect = null;
+    let activeEl = null, activeRect = null, activeIsCard = false;
     let parentCard = null, parentRect = null;
 
     const invalidateRects = () => { activeRect = null; parentRect = null; };
@@ -3614,12 +4097,23 @@ function bindCursorGlow() {
     window.addEventListener('resize', invalidateRects, { passive: true });
     document.addEventListener('pointerleave', () => { activeEl = null; activeRect = null; parentCard = null; parentRect = null; }, { passive: true });
 
+    const setGlowPos = (node, x, y, isCard) => {
+        const qx = (x + 3) & ~7;
+        const qy = (y + 3) & ~7;
+        if (node._gx === qx && node._gy === qy) return;
+        node._gx = qx;
+        node._gy = qy;
+        node.style.setProperty(isCard ? '--card-mx' : '--mx', qx + 'px');
+        node.style.setProperty(isCard ? '--card-my' : '--my', qy + 'px');
+    };
+
     document.addEventListener('pointerover', e => {
-        if (e.pointerType && e.pointerType !== 'mouse') return;
+        if ((e.pointerType && e.pointerType !== 'mouse') || document.documentElement.classList.contains('no-cursor-glow')) return;
         const hit = e.target?.closest?.(GLOW_SEL) || null;
         if (hit !== activeEl) {
             activeEl = hit;
             activeRect = null;
+            activeIsCard = !!(hit && (hit.classList.contains('cat-card') || hit.classList.contains('clock-card')));
             parentCard = (hit && (hit.classList.contains('chip') || hit.classList.contains('clock-wx')))
                 ? hit.closest('.cat-card, .clock-card')
                 : null;
@@ -3637,69 +4131,91 @@ function bindCursorGlow() {
             raf = 0;
             if (activeEl && activeEl.isConnected) {
                 if (!activeRect) activeRect = activeEl.getBoundingClientRect();
-                activeEl.style.setProperty('--mx', `${Math.round(cx - activeRect.left)}px`);
-                activeEl.style.setProperty('--my', `${Math.round(cy - activeRect.top)}px`);
+                setGlowPos(activeEl, cx - activeRect.left, cy - activeRect.top, activeIsCard);
             }
             if (parentCard && parentCard.isConnected) {
                 if (!parentRect) parentRect = parentCard.getBoundingClientRect();
-                parentCard.style.setProperty('--mx', `${Math.round(cx - parentRect.left)}px`);
-                parentCard.style.setProperty('--my', `${Math.round(cy - parentRect.top)}px`);
+                setGlowPos(parentCard, cx - parentRect.left, cy - parentRect.top, true);
             }
         });
     }, { passive: true });
 }
 
+function applyCoreSettingsSync(s) {
+    applyThemeSync(s.theme, s.customColor);
+    applyAppearance(s.appearance);
+    applyLayoutPreferences(s);
+    paintTitleAndSubtitle(s);
+    paintAvatar(s.avatar || '', s.title);
+}
+
 async function boot() {
     const start = performance.now();
     try {
-        const { settings: s, categories: cats, history } = await store.boot();
-        s.bg = await repairBgMedia(s);
-        await applyTheme(s.theme, false, s.customColor);
-        applyAppearance(s.appearance);
-        applyLayoutPreferences(s);
-        paintTitleAndSubtitle(s);
-        paintAvatar(s.avatar || '', s.title);
-
         setupVideoVisibility();
-        initClocks(s);
-
-        applyBackground(s);
-        const searchReady = initSearch(s, history);
         bindCatModal(); bindOverlays(); bindKeys(); bindCursorGlow();
         $('#avatar')?.addEventListener('click', e => {
             const dur = animDur(240);
             if (dur) e.currentTarget.animate?.([{ transform: 'scale(.92)' }, { transform: 'scale(1.06)' }, { transform: 'none' }], { duration: dur, easing: EASE });
         });
-        await Promise.all([searchReady, renderCats(cats)]);
-        if (s.autoFocusSearch) searchInput()?.focus({ preventScroll: true });
+
+        const fast = store.peekBoot();
+        let fastSettingsSig = '', fastCatsSig = '', fastHistSig = '';
+        if (fast) {
+            fastSettingsSig = store.sig;
+            fastCatsSig = store.catsSig;
+            fastHistSig = store.histSig;
+            applyCoreSettingsSync(fast.settings);
+            initClocks(fast.settings);
+            applyBackground(fast.settings);
+            initSearch(fast.settings, fast.history);
+            renderCats(fast.categories);
+            if (fast.settings.autoFocusSearch) searchInput()?.focus({ preventScroll: true });
+        }
+
+        const { settings: s, categories: cats, history } = await store.boot();
+        if (s.bg?.url?.startsWith('data:') && s.bg.url.length > 65536) {
+            s.bg = await repairBgMedia(s);
+            store.sig = JSON.stringify(s);
+        }
+
+        if (!fast || store.sig !== fastSettingsSig) {
+            applyCoreSettingsSync(s);
+            initClocks(s);
+            if (!fast || JSON.stringify(s.bg || {}) !== bgAppliedSig) applyBackground(s);
+        }
+        const searchReady = (!fast || store.histSig !== fastHistSig || store.sig !== fastSettingsSig)
+            ? initSearch(s, history)
+            : Promise.resolve();
+        const catsReady = (!fast || store.catsSig !== fastCatsSig || store.sig !== fastSettingsSig)
+            ? renderCats(cats)
+            : catsRun;
+        await Promise.all([searchReady, catsReady]);
+        if (!fast && s.autoFocusSearch) searchInput()?.focus({ preventScroll: true });
 
         const sync = debounce(async next => {
             if (!next) return;
-            const sig = JSON.stringify(next);
-            if (sig === store.sig) return;
-            store.sig = sig;
-            await applyTheme(next.theme, false, next.customColor);
-            applyAppearance(next.appearance);
-            applyLayoutPreferences(next);
-            if (JSON.stringify(next.bg || {}) !== bgAppliedSig) await applyBackground(next);
-            paintTitleAndSubtitle(next);
-            paintAvatar(next.avatar || '', next.title);
-            if (ENGINES[next.engine] && next.engine !== engine) { engine = next.engine; paintEngine(); }
-            const sel = $('#theme-select'); if (sel) sel.value = next.theme || 'rose';
-            syncThemeSwatches(next.theme || 'rose');
+            const cur = settingsCache || next;
+            applyCoreSettingsSync(cur);
+            if (JSON.stringify(cur.bg || {}) !== bgAppliedSig) await applyBackground(cur);
+            if (ENGINES[cur.engine] && cur.engine !== engine) { engine = cur.engine; paintEngine(); }
+            const sel = $('#theme-select'); if (sel) sel.value = cur.theme || 'rose';
+            syncThemeSwatches(cur.theme || 'rose');
             const nextClockSig = JSON.stringify({
-                cities: next.cities || [],
-                hour12: next.clockFormat === '12h',
-                seconds: next.clockSeconds !== false,
-                date: !!next.clockDate,
-                hideClocks: !!next.hideClocks,
-                wxUnit: next.wxUnit === 'F' ? 'F' : 'C',
-                wxDetails: !!next.wxDetails
+                cities: cur.cities || [],
+                hour12: cur.clockFormat === '12h',
+                seconds: cur.clockSeconds !== false,
+                date: !!cur.clockDate,
+                hideClocks: !!cur.hideClocks,
+                wxUnit: cur.wxUnit === 'F' ? 'F' : 'C',
+                wxDetails: !!cur.wxDetails
             });
-            if (nextClockSig !== clockConfigSig) initClocks(next);
+            if (nextClockSig !== clockConfigSig) initClocks(cur);
             renderCats(categories);
+            const sg = $('#suggest');
+            if (sg && !sg.hidden && !sg.classList.contains('closing')) renderSuggest();
             const setOv = document.getElementById('settings-overlay');
-            if (setOv && !setOv.hidden) syncSettingsUI(next);
+            if (setOv && !setOv.hidden) syncSettingsUI(cur);
         }, 120);
         store.onSettingsChange(sync);
         store.onCategoriesChange(renderCats);
